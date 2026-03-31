@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
 
     # Valkey (Redis-compatible)
-    valkey_url: str = "redis://localhost:6379"
+    valkey_url: str = "valkey://localhost:6379"
 
 
 settings = Settings()
