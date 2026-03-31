@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class RawFile:
     """A single file as loaded from any source."""
 
-    path: str   # relative path within the project (always forward-slash)
+    path: str  # relative path within the project (always forward-slash)
     content: bytes
 
 
@@ -84,6 +84,7 @@ class ZipLoader:
     def load(self) -> Iterator[RawFile]:
         if isinstance(self.source, bytes):
             import io
+
             zf = zipfile.ZipFile(io.BytesIO(self.source))
         else:
             zf = zipfile.ZipFile(self.source)
