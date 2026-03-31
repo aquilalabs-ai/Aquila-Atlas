@@ -5,7 +5,10 @@ from __future__ import annotations
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterator, Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass(frozen=True)
