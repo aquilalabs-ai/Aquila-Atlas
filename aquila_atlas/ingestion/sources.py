@@ -5,7 +5,7 @@ from __future__ import annotations
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Protocol
+from collections.abc import Iterator, Protocol
 
 
 @dataclass(frozen=True)
