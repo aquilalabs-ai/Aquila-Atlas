@@ -164,7 +164,7 @@ class GitHubLoader:
         for attempt in range(retries):
             resp = client.get(f"{_GH_API}{path}", headers=self._headers())
             if resp.status_code in {500, 502, 503, 504} and attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 continue
             resp.raise_for_status()
             return resp.json()

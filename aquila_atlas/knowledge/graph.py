@@ -17,9 +17,26 @@ if TYPE_CHECKING:
 
 _BUILTINS: frozenset[str] = frozenset(
     {
-        "print", "len", "range", "str", "int", "list", "dict", "tuple",
-        "set", "bool", "type", "super", "isinstance", "issubclass",
-        "hasattr", "getattr", "setattr", "delattr", "vars", "dir",
+        "print",
+        "len",
+        "range",
+        "str",
+        "int",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "bool",
+        "type",
+        "super",
+        "isinstance",
+        "issubclass",
+        "hasattr",
+        "getattr",
+        "setattr",
+        "delattr",
+        "vars",
+        "dir",
     }
 )
 
@@ -109,9 +126,7 @@ class GraphStore:
     def __init__(self, uri: str, user: str, password: str) -> None:
         import neo4j  # noqa: PLC0415
 
-        self._driver: neo4j.Driver = neo4j.GraphDatabase.driver(
-            uri, auth=(user, password)
-        )
+        self._driver: neo4j.Driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
 
     # ------------------------------------------------------------------
     # Context manager
@@ -256,9 +271,7 @@ class GraphStore:
                         if target_id is not None:
                             import_rows.append(
                                 {
-                                    "source_id": _file_id(
-                                        repo_id, file_entity.file_path
-                                    ),
+                                    "source_id": _file_id(repo_id, file_entity.file_path),
                                     "target_id": target_id,
                                 }
                             )
@@ -276,9 +289,7 @@ class GraphStore:
                 if import_rows:
                     session.execute_write(_write_import_edges, rows=import_rows)
                 if unresolved_rows:
-                    session.execute_write(
-                        _write_unresolved_imports, rows=unresolved_rows
-                    )
+                    session.execute_write(_write_unresolved_imports, rows=unresolved_rows)
 
             # 7. Call graph edges
             all_callables = functions + methods
@@ -297,9 +308,7 @@ class GraphStore:
                     if callee_name not in known:
                         continue
                     callee_id, _ = known[callee_name]
-                    call_rows.append(
-                        {"caller_id": caller_id, "callee_id": callee_id}
-                    )
+                    call_rows.append({"caller_id": caller_id, "callee_id": callee_id})
                 if call_rows:
                     session.execute_write(_write_call_edges, rows=call_rows)
 

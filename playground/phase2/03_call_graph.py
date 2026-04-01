@@ -21,14 +21,14 @@ from aquila_atlas.knowledge import extract_calls, get_graph_store
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
-TARGET  = "aquila_atlas/ingestion"
+TARGET = "aquila_atlas/ingestion"
 REPO_ID = "playground-callgraph"
 
 # ──────────────────────────────────────────────
 # 1. Parse and extract raw call triples
 # ──────────────────────────────────────────────
 loader = LocalFolderLoader(TARGET)
-files  = list(loader.load())
+files = list(loader.load())
 
 all_entities = []
 for f in files:
@@ -57,9 +57,9 @@ for caller_qn, _caller_fp, callee_name in call_triples:
 print("\nIngesting into Neo4j to resolve call edges…")
 with get_graph_store() as graph:
     graph.ingest(
-        repo_id  = REPO_ID,
-        label    = loader.label(),
-        entities = all_entities,
+        repo_id=REPO_ID,
+        label=loader.label(),
+        entities=all_entities,
     )
 
     # Show resolved callees for each function that has any
@@ -67,7 +67,7 @@ with get_graph_store() as graph:
     print("─" * 70)
     found_any = False
     for fn in callables:
-        fn_id   = f"{REPO_ID}:{fn.file_path}:{fn.qualified_name}"
+        fn_id = f"{REPO_ID}:{fn.file_path}:{fn.qualified_name}"
         callees = graph.get_callees(fn_id)
         if callees:
             found_any = True

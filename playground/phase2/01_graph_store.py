@@ -21,14 +21,14 @@ from aquila_atlas.knowledge import get_graph_store
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
-TARGET  = "aquila_atlas/ingestion"   # folder to ingest
+TARGET = "aquila_atlas/ingestion"  # folder to ingest
 REPO_ID = "playground-ingestion"
 
 # ──────────────────────────────────────────────
 # 1. Parse entities from folder
 # ──────────────────────────────────────────────
 loader = LocalFolderLoader(TARGET)
-files  = list(loader.load())
+files = list(loader.load())
 
 all_entities = []
 for f in files:
@@ -48,10 +48,10 @@ for t, n in sorted(by_type.items()):
 print("\nConnecting to Neo4j and ingesting…")
 with get_graph_store() as graph:
     graph.ingest(
-        repo_id   = REPO_ID,
-        label     = loader.label(),
-        entities  = all_entities,
-        commit_sha= None,
+        repo_id=REPO_ID,
+        label=loader.label(),
+        entities=all_entities,
+        commit_sha=None,
     )
     print("Ingest complete.\n")
 
@@ -63,17 +63,17 @@ with get_graph_store() as graph:
     functions = [e for e in all_entities if e.type == "function"]
     if functions:
         sample = functions[0]
-        fn_id  = f"{REPO_ID}:{sample.file_path}:{sample.qualified_name}"
+        fn_id = f"{REPO_ID}:{sample.file_path}:{sample.qualified_name}"
 
         print(f"Context for function: {sample.qualified_name}  ({sample.file_path})")
         ctx = graph.get_context(fn_id)
         print(f"  File       : {ctx['file']}")
-        print(f"  Callers    : {len(ctx['callers'])}")   # type: ignore[arg-type]
-        print(f"  Callees    : {len(ctx['callees'])}")   # type: ignore[arg-type]
+        print(f"  Callers    : {len(ctx['callers'])}")  # type: ignore[arg-type]
+        print(f"  Callees    : {len(ctx['callees'])}")  # type: ignore[arg-type]
         print(f"  Parent cls : {ctx['parent_class']}\n")
 
         print("Callees:")
-        for callee in ctx["callees"]:                    # type: ignore[union-attr]
+        for callee in ctx["callees"]:  # type: ignore[union-attr]
             print(f"  → {callee.get('qualified_name', '?')}  ({callee.get('file_path', '?')})")
 
     # Import graph for the first file

@@ -15,7 +15,7 @@ from aquila_atlas.ingestion import LocalFolderLoader, chunk_files
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
-TARGET = "aquila_atlas/ingestion"   # change to any folder
+TARGET = "aquila_atlas/ingestion"  # change to any folder
 MAX_TOKENS = 512
 
 # ──────────────────────────────────────────────

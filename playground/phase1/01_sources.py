@@ -35,7 +35,7 @@ for f in files:
 # 2. ZIP LOADER
 # ──────────────────────────────────────────────
 # Uncomment and point to a real zip to try this section.
-'''
+"""
 print("\n" + "=" * 60)
 print("ZIP LOADER")
 print("=" * 60)
@@ -50,7 +50,7 @@ print(f"Files    : {len(files_zip)}\n")
 
 for f in files_zip[:5]:
     print(f"  {f.path:<50}  {f.size:>6} bytes")
-'''
+"""
 
 # ──────────────────────────────────────────────
 # 3. GITHUB LOADER
@@ -58,7 +58,7 @@ for f in files_zip[:5]:
 # Requires GITHUB_TOKEN in your environment (or .env file).
 # Uncomment and set the URL to try this section.
 
-'''
+"""
 import os
 from aquila_atlas.config import get_settings
 #
@@ -78,4 +78,4 @@ print(f"Files    : {len(files_gh)}\n")
 #
 for f in files_gh[:10]:
     print(f"  {f.path:<60}  {f.size:>6} bytes")
-'''
+"""

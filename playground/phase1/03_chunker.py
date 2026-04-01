@@ -16,7 +16,7 @@ from aquila_atlas.ingestion.chunker import chunk_entity, chunk_file_summary
 # Config — tweak these to explore behaviour
 # ──────────────────────────────────────────────
 TARGET_FILE = "chunker.py"
-MAX_TOKENS = 512      # lower this (e.g. 50) to force splits
+MAX_TOKENS = 512  # lower this (e.g. 50) to force splits
 OVERLAP_TOKENS = 50
 
 # ──────────────────────────────────────────────

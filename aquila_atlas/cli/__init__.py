@@ -6,6 +6,7 @@ import typer
 
 app = typer.Typer(name="aquila", help="The Atlas of your codebase.")
 
+
 # uv run aquila "how is token-aware chunking implemented" --repo playground-full
 @app.command()
 def search(

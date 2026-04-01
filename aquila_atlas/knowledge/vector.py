@@ -224,9 +224,7 @@ class VectorStore:
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
 
                 sparse_indices, sparse_values = _sparse_vector(chunk.content)
-                language = EXT_TO_LANG.get(
-                    Path(chunk.entity.file_path).suffix.lower(), "unknown"
-                )
+                language = EXT_TO_LANG.get(Path(chunk.entity.file_path).suffix.lower(), "unknown")
 
                 points.append(
                     PointStruct(
@@ -290,9 +288,7 @@ class VectorStore:
         if file_path is not None:
             conditions.append(FieldCondition(key="file_path", match=MatchValue(value=file_path)))
         if chunk_type is not None:
-            conditions.append(
-                FieldCondition(key="chunk_type", match=MatchValue(value=chunk_type))
-            )
+            conditions.append(FieldCondition(key="chunk_type", match=MatchValue(value=chunk_type)))
         if language is not None:
             conditions.append(FieldCondition(key="language", match=MatchValue(value=language)))
 

@@ -22,16 +22,16 @@ from aquila_atlas.knowledge import get_knowledge_service
 # ──────────────────────────────────────────────
 # Config — change these to explore
 # ──────────────────────────────────────────────
-TARGET   = "aquila_atlas"        # whole package
-REPO_ID  = "playground-full"
-QUERY    = "how is token-aware chunking implemented"
-TOP_K    = 5
+TARGET = "aquila_atlas"  # whole package
+REPO_ID = "playground-full"
+QUERY = "how is token-aware chunking implemented"
+TOP_K = 5
 
 # ──────────────────────────────────────────────
 # 1. Ingest: parse + chunk + store
 # ──────────────────────────────────────────────
 loader = LocalFolderLoader(TARGET)
-files  = list(loader.load())
+files = list(loader.load())
 
 print(f"Source   : {loader.label()}")
 print(f"Files    : {len(files)}")
@@ -56,10 +56,10 @@ svc = get_knowledge_service()
 
 print("Step 1/2 — ingesting into Neo4j graph…")
 svc.graph.ingest(
-    repo_id   = REPO_ID,
-    label     = loader.label(),
-    entities  = all_entities,
-    commit_sha= None,
+    repo_id=REPO_ID,
+    label=loader.label(),
+    entities=all_entities,
+    commit_sha=None,
 )
 print("  Graph ingest complete.")
 
@@ -79,7 +79,9 @@ if not results:
     print("No results found.")
 else:
     for i, r in enumerate(results, 1):
-        print(f"[{i}] score={r.score:.4f}  {r.file_path}:{r.start_line}-{r.end_line}  ({r.chunk_type})")
+        print(
+            f"[{i}] score={r.score:.4f}  {r.file_path}:{r.start_line}-{r.end_line}  ({r.chunk_type})"
+        )
         print(f"     {r.qualified_name}  [{r.language}]")
         preview = r.content[:200].replace("\n", " ")
         print(f"     {preview}{'…' if len(r.content) > 200 else ''}\n")
@@ -94,8 +96,8 @@ if results:
     print(f"Graph context for top result: {top.qualified_name}")
     ctx = svc.get_context(fn_id)
     print(f"  File       : {ctx['file']}")
-    print(f"  Callers    : {len(ctx['callers'])}")    # type: ignore[arg-type]
-    print(f"  Callees    : {len(ctx['callees'])}")    # type: ignore[arg-type]
+    print(f"  Callers    : {len(ctx['callers'])}")  # type: ignore[arg-type]
+    print(f"  Callees    : {len(ctx['callees'])}")  # type: ignore[arg-type]
     print(f"  Parent cls : {ctx['parent_class']}")
 
 print("\nDone.")
