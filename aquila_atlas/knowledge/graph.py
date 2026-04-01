@@ -5,11 +5,10 @@ from __future__ import annotations
 import ast
 from typing import TYPE_CHECKING
 
-from aquila_atlas.ingestion.metadata import CodeEntity
-
 if TYPE_CHECKING:
     import neo4j
     from aquila_atlas.config import Settings
+    from aquila_atlas.ingestion.metadata import CodeEntity
 
 # ---------------------------------------------------------------------------
 # Constants

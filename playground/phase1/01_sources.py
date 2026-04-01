@@ -9,8 +9,7 @@ Run:
 
 from __future__ import annotations
 
-from pathlib import Path
-from aquila_atlas.ingestion import GitHubLoader, LocalFolderLoader, ZipLoader
+from aquila_atlas.ingestion import LocalFolderLoader
 
 # ──────────────────────────────────────────────
 # 1. LOCAL FOLDER

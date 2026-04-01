@@ -7,15 +7,16 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Sequence
 
-from aquila_atlas.ingestion.metadata import CodeChunk
 from aquila_atlas.ingestion.sources import EXT_TO_LANG
 
 if TYPE_CHECKING:
     from openai import OpenAI
     from qdrant_client import QdrantClient
+    from qdrant_client.models import ScoredPoint
     from aquila_atlas.config import Settings
+    from aquila_atlas.ingestion.metadata import CodeChunk
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -71,29 +72,29 @@ class SearchResult:
 
 
 def _rrf_merge(
-    dense_hits: list[object],
-    sparse_hits: list[object],
+    dense_hits: Sequence[ScoredPoint],
+    sparse_hits: Sequence[ScoredPoint],
     top_k: int,
     k: int = 60,
-) -> list[tuple[str, float, dict[str, object]]]:
+) -> list[tuple[str, float, dict[str, Any]]]:
     """Reciprocal Rank Fusion over two ranked hit lists.
 
     Returns up to *top_k* ``(point_id, rrf_score, payload)`` tuples sorted
     by descending score.
     """
     scores: dict[str, float] = {}
-    payloads: dict[str, dict[str, object]] = {}
+    payloads: dict[str, dict[str, Any]] = {}
 
     for rank, hit in enumerate(dense_hits, 1):
-        pid = str(hit.id)  # type: ignore[union-attr]
+        pid = str(hit.id)
         scores[pid] = scores.get(pid, 0.0) + 1.0 / (k + rank)
-        payloads[pid] = dict(hit.payload or {})  # type: ignore[union-attr]
+        payloads[pid] = dict(hit.payload or {})
 
     for rank, hit in enumerate(sparse_hits, 1):
-        pid = str(hit.id)  # type: ignore[union-attr]
+        pid = str(hit.id)
         scores[pid] = scores.get(pid, 0.0) + 1.0 / (k + rank)
         if pid not in payloads:
-            payloads[pid] = dict(hit.payload or {})  # type: ignore[union-attr]
+            payloads[pid] = dict(hit.payload or {})
 
     top = sorted(scores, key=lambda x: scores[x], reverse=True)[:top_k]
     return [(pid, scores[pid], payloads[pid]) for pid in top]
@@ -215,7 +216,7 @@ class VectorStore:
             batch_embeddings = all_embeddings[offset : offset + batch_size]
             points: list[PointStruct] = []
 
-            for chunk, dense_vec in zip(batch_chunks, batch_embeddings):
+            for chunk, dense_vec in zip(batch_chunks, batch_embeddings, strict=True):
                 key = f"{repo_id}:{chunk.entity.file_path}:{chunk.entity.qualified_name}:{chunk.chunk_index}"
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
 
@@ -282,7 +283,7 @@ class VectorStore:
         sparse_indices, sparse_values = _sparse_vector(query)
 
         # Build filter — repo_id is mandatory
-        conditions = [FieldCondition(key="repo_id", match=MatchValue(value=repo_id))]
+        conditions: list[Any] = [FieldCondition(key="repo_id", match=MatchValue(value=repo_id))]
         if file_path is not None:
             conditions.append(FieldCondition(key="file_path", match=MatchValue(value=file_path)))
         if chunk_type is not None:

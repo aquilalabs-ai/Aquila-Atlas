@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aquila_atlas.knowledge.graph import GraphStore
-from aquila_atlas.knowledge.vector import SearchResult, VectorStore
-
 if TYPE_CHECKING:
     from aquila_atlas.config import Settings
     from aquila_atlas.ingestion.metadata import CodeChunk
+    from aquila_atlas.knowledge.graph import GraphStore
+    from aquila_atlas.knowledge.vector import SearchResult, VectorStore
 
 
 @dataclass(frozen=True)

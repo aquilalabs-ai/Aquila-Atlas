@@ -90,7 +90,7 @@ with get_graph_store() as graph:
         else:
             print("  (none resolved in this folder)")
 
-        print(f"\nImported by:")
+        print("\nImported by:")
         importers = graph.get_file_importers(file_id)
         if importers:
             for imp in importers:

@@ -62,7 +62,7 @@ with get_vector_store() as store:
     # 4. Filtered search — functions only
     # ──────────────────────────────────────────
     print("-" * 60)
-    print(f'Same query filtered to chunk_type=function:')
+    print('Same query filtered to chunk_type=function:')
     results_fn = store.search(QUERY, repo_id=REPO_ID, top_k=5, chunk_type="function")
     for i, r in enumerate(results_fn, 1):
         print(f"[{i}] score={r.score:.4f}  {r.qualified_name}  ({r.file_path}:{r.start_line})")
