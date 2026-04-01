@@ -7,12 +7,13 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from aquila_atlas.ingestion.sources import EXT_TO_LANG
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from openai import OpenAI
     from qdrant_client import QdrantClient
     from qdrant_client.models import ScoredPoint
