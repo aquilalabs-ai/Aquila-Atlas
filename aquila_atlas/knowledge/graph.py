@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import neo4j
+
     from aquila_atlas.config import Settings
     from aquila_atlas.ingestion.metadata import CodeEntity
 

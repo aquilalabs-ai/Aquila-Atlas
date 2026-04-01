@@ -7,7 +7,8 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from aquila_atlas.ingestion.sources import EXT_TO_LANG
 
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from openai import OpenAI
     from qdrant_client import QdrantClient
     from qdrant_client.models import ScoredPoint
+
     from aquila_atlas.config import Settings
     from aquila_atlas.ingestion.metadata import CodeChunk
 
