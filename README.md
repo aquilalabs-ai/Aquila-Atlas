@@ -138,8 +138,8 @@ print(ctx)
 Or use the CLI directly:
 
 ```bash
-aquila search "how is token chunking implemented" --repo my-repo
-aquila search "parse imports" --repo my-repo --type function --lang Python --top-k 5
+aquila "how is token chunking implemented" --repo my-repo
+aquila "parse imports" --repo my-repo --type function --lang Python --top-k 5
 ```
 
 ### Run Tests
