@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -10,6 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aquila_atlas.ingestion.sources import EXT_TO_LANG
+
+logger = logging.getLogger("aquila.vector")
+
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -189,18 +194,33 @@ class VectorStore:
     # Embedding
     # ------------------------------------------------------------------
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        response = self._embeddings.embeddings.create(model=self._model, input=texts)
-        return [item.embedding for item in response.data]
+    def _embed(self, texts: list[str], _retries: int = 3) -> list[list[float]]:
+        """Embed *texts* with retry on transient connection errors (e.g. Ollama OOM reset)."""
+        last_exc: Exception | None = None
+        for attempt in range(_retries):
+            try:
+                response = self._embeddings.embeddings.create(model=self._model, input=texts)
+                return [item.embedding for item in response.data]
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _retries - 1:
+                    wait = 2**attempt  # 1s, 2s, 4s …
+                    logger.warning(
+                        "embed attempt %d/%d failed (%s) — retrying in %ds",
+                        attempt + 1,
+                        _retries,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
+        raise RuntimeError(f"Embedding failed after {_retries} attempts") from last_exc
 
     # ------------------------------------------------------------------
     # Upsert
     # ------------------------------------------------------------------
 
-    def upsert(self, chunks: list[CodeChunk], repo_id: str, batch_size: int = 64) -> None:
+    def upsert(self, chunks: list[CodeChunk], repo_id: str, batch_size: int = 25) -> None:
         """Embed *chunks* and upsert them into the Qdrant collection."""
-        from qdrant_client.models import PointStruct, SparseVector  # noqa: PLC0415
-
         if not chunks:
             return
 
@@ -217,41 +237,198 @@ class VectorStore:
         for offset in range(0, len(chunks), batch_size):
             batch_chunks = chunks[offset : offset + batch_size]
             batch_embeddings = all_embeddings[offset : offset + batch_size]
-            points: list[PointStruct] = []
-
-            for chunk, dense_vec in zip(batch_chunks, batch_embeddings, strict=True):
-                key = f"{repo_id}:{chunk.entity.file_path}:{chunk.entity.qualified_name}:{chunk.chunk_index}"
-                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
-
-                sparse_indices, sparse_values = _sparse_vector(chunk.content)
-                language = EXT_TO_LANG.get(Path(chunk.entity.file_path).suffix.lower(), "unknown")
-
-                points.append(
-                    PointStruct(
-                        id=point_id,
-                        vector={
-                            "dense": dense_vec,
-                            "sparse": SparseVector(
-                                indices=sparse_indices,
-                                values=sparse_values,
-                            ),
-                        },
-                        payload={
-                            "repo_id": repo_id,
-                            "file_path": chunk.entity.file_path,
-                            "chunk_type": chunk.entity.type,
-                            "start_line": chunk.entity.start_line,
-                            "end_line": chunk.entity.end_line,
-                            "qualified_name": chunk.entity.qualified_name,
-                            "chunk_index": chunk.chunk_index,
-                            "chunk_total": chunk.chunk_total,
-                            "language": language,
-                            "content": chunk.content,
-                        },
-                    )
-                )
-
+            points = [
+                self._build_point(chunk, dense_vec, repo_id)
+                for chunk, dense_vec in zip(batch_chunks, batch_embeddings, strict=True)
+            ]
             self._client.upsert(collection_name=COLLECTION_NAME, points=points)
+
+    def _build_point(self, chunk: CodeChunk, dense_vec: list[float], repo_id: str) -> Any:
+        """Construct a Qdrant PointStruct for a single chunk."""
+        from qdrant_client.models import PointStruct, SparseVector  # noqa: PLC0415
+
+        key = (
+            f"{repo_id}:{chunk.entity.file_path}:{chunk.entity.qualified_name}:{chunk.chunk_index}"
+        )
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
+        sparse_indices, sparse_values = _sparse_vector(chunk.content)
+        language = EXT_TO_LANG.get(Path(chunk.entity.file_path).suffix.lower(), "unknown")
+
+        return PointStruct(
+            id=point_id,
+            vector={
+                "dense": dense_vec,
+                "sparse": SparseVector(indices=sparse_indices, values=sparse_values),
+            },
+            payload={
+                "repo_id": repo_id,
+                "file_path": chunk.entity.file_path,
+                "chunk_type": chunk.entity.type,
+                "start_line": chunk.entity.start_line,
+                "end_line": chunk.entity.end_line,
+                "qualified_name": chunk.entity.qualified_name,
+                "chunk_index": chunk.chunk_index,
+                "chunk_total": chunk.chunk_total,
+                "language": language,
+                "content": chunk.content,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Repo listing
+    # ------------------------------------------------------------------
+
+    def get_repo_stats(self, repo_id: str) -> dict[str, int]:
+        """Return chunk count, file count, and entity-type breakdown for *repo_id*."""
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return {"chunks": 0, "files": 0}
+
+        from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
+
+        qdrant_filter = Filter(
+            must=[FieldCondition(key="repo_id", match=MatchValue(value=repo_id))]
+        )
+        count_result = self._client.count(
+            collection_name=COLLECTION_NAME,
+            count_filter=qdrant_filter,
+            exact=True,
+        )
+        total_chunks = count_result.count
+
+        files: set[str] = set()
+        type_counts: dict[str, int] = {}
+        offset = None
+        while True:
+            result, next_offset = self._client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                with_payload=["file_path", "chunk_type"],
+                limit=256,
+                offset=offset,
+            )
+            for point in result:
+                if point.payload:
+                    files.add(str(point.payload.get("file_path", "")))
+                    ct = str(point.payload.get("chunk_type", "unknown"))
+                    type_counts[ct] = type_counts.get(ct, 0) + 1
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        return {"chunks": total_chunks, "files": len(files), **type_counts}
+
+    def list_files(self, repo_id: str) -> list[str]:
+        """Return all unique file paths ingested for *repo_id*, sorted."""
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return []
+
+        from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
+
+        qdrant_filter = Filter(
+            must=[FieldCondition(key="repo_id", match=MatchValue(value=repo_id))]
+        )
+        file_paths: set[str] = set()
+        offset = None
+        while True:
+            result, next_offset = self._client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                with_payload=["file_path"],
+                limit=256,
+                offset=offset,
+            )
+            for point in result:
+                if point.payload and "file_path" in point.payload:
+                    file_paths.add(str(point.payload["file_path"]))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        return sorted(file_paths)
+
+    def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, object]]:
+        """Return all chunk payloads for a specific file, ordered by start_line."""
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return []
+
+        from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
+
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(key="repo_id", match=MatchValue(value=repo_id)),
+                FieldCondition(key="file_path", match=MatchValue(value=file_path)),
+            ]
+        )
+        chunks: list[dict[str, object]] = []
+        offset = None
+        while True:
+            result, next_offset = self._client.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                with_payload=True,
+                limit=256,
+                offset=offset,
+            )
+            for point in result:
+                if point.payload:
+                    chunks.append(dict(point.payload))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        return sorted(chunks, key=lambda c: int(c.get("start_line", 0)))
+
+    def delete_repo(self, repo_id: str) -> int:
+        """Delete all points for *repo_id* from the collection.
+
+        Returns the number of points deleted.
+        """
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return 0
+
+        from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
+
+        qdrant_filter = Filter(
+            must=[FieldCondition(key="repo_id", match=MatchValue(value=repo_id))]
+        )
+        count_before = self._client.count(
+            collection_name=COLLECTION_NAME,
+            count_filter=qdrant_filter,
+            exact=True,
+        ).count
+        self._client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=qdrant_filter,
+        )
+        return count_before
+
+    def list_repo_ids(self) -> list[str]:
+        """Return all repository IDs present in the collection, sorted."""
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return []
+
+        repo_ids: set[str] = set()
+        offset = None
+        while True:
+            result, next_offset = self._client.scroll(
+                collection_name=COLLECTION_NAME,
+                with_payload=["repo_id"],
+                limit=256,
+                offset=offset,
+            )
+            for point in result:
+                if point.payload and "repo_id" in point.payload:
+                    repo_ids.add(str(point.payload["repo_id"]))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        return sorted(repo_ids)
 
     # ------------------------------------------------------------------
     # Search

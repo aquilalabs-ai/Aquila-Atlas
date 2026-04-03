@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import neo4j
@@ -177,140 +177,167 @@ class GraphStore:
         methods = [e for e in entities if e.type == "method"]
 
         with self._driver.session() as session:
-            # 1. Repository node
-            session.execute_write(
-                _write_repo,
-                repo_id=repo_id,
-                label=label,
-                commit_sha=commit_sha,
-            )
+            self._ingest_repo_node(session, repo_id, label, commit_sha)
+            self._ingest_file_nodes(session, repo_id, files)
+            self._ingest_class_nodes(session, repo_id, classes)
+            self._ingest_function_nodes(session, repo_id, functions)
+            self._ingest_method_nodes(session, repo_id, methods)
+            self._ingest_import_edges(session, repo_id, files)
+            self._ingest_call_edges(session, repo_id, functions + methods)
 
-            # 2. File nodes + CONTAINS edges
-            if files:
-                session.execute_write(
-                    _write_files,
-                    repo_id=repo_id,
-                    rows=[
-                        {
-                            **_entity_props(e, repo_id, _file_id(repo_id, e.file_path)),
-                            "unresolved_imports": list(e.imports),
-                        }
-                        for e in files
-                    ],
-                )
+    # ------------------------------------------------------------------
+    # Private ingestion helpers
+    # ------------------------------------------------------------------
 
-            # 3. Class nodes + DEFINES edges
-            if classes:
-                session.execute_write(
-                    _write_classes,
-                    rows=[
-                        {
-                            **_entity_props(
-                                e,
-                                repo_id,
-                                _entity_id(repo_id, e.file_path, e.qualified_name),
-                            ),
-                            "file_id": _file_id(repo_id, e.file_path),
-                        }
-                        for e in classes
-                    ],
-                )
+    def _ingest_repo_node(
+        self,
+        session: Any,
+        repo_id: str,
+        label: str,
+        commit_sha: str | None,
+    ) -> None:
+        session.execute_write(_write_repo, repo_id=repo_id, label=label, commit_sha=commit_sha)
 
-            # 4. Function nodes + DEFINES edges
-            if functions:
-                session.execute_write(
-                    _write_functions,
-                    rows=[
-                        {
-                            **_entity_props(
-                                e,
-                                repo_id,
-                                _entity_id(repo_id, e.file_path, e.qualified_name),
-                            ),
-                            "file_id": _file_id(repo_id, e.file_path),
-                        }
-                        for e in functions
-                    ],
-                )
-
-            # 5. Method nodes + HAS_METHOD edges
-            if methods:
-                session.execute_write(
-                    _write_methods,
-                    rows=[
-                        {
-                            **_entity_props(
-                                e,
-                                repo_id,
-                                _entity_id(repo_id, e.file_path, e.qualified_name),
-                            ),
-                            "parent_id": _entity_id(repo_id, e.file_path, e.parent)
-                            if e.parent
-                            else None,
-                        }
-                        for e in methods
-                    ],
-                )
-
-            # 6. Import edges
-            if files:
-                # Build a lookup: file_path → file_id for all ingested files
-                known_files: dict[str, str] = {
-                    e.file_path: _file_id(repo_id, e.file_path) for e in files
+    def _ingest_file_nodes(
+        self,
+        session: Any,
+        repo_id: str,
+        files: list[CodeEntity],
+    ) -> None:
+        if not files:
+            return
+        session.execute_write(
+            _write_files,
+            repo_id=repo_id,
+            rows=[
+                {
+                    **_entity_props(e, repo_id, _file_id(repo_id, e.file_path)),
+                    "unresolved_imports": list(e.imports),
                 }
-                import_rows: list[dict[str, object]] = []
-                unresolved_rows: list[dict[str, object]] = []
+                for e in files
+            ],
+        )
 
-                for file_entity in files:
-                    unresolved: list[str] = []
-                    for imp in file_entity.imports:
-                        # Try to match import string to a known file path.
-                        # Dotted imports like "aquila_atlas.ingestion.parser"
-                        # are translated to path candidates.
-                        target_id = _resolve_import(imp, known_files)
-                        if target_id is not None:
-                            import_rows.append(
-                                {
-                                    "source_id": _file_id(repo_id, file_entity.file_path),
-                                    "target_id": target_id,
-                                }
-                            )
-                        else:
-                            unresolved.append(imp)
+    def _ingest_class_nodes(
+        self,
+        session: Any,
+        repo_id: str,
+        classes: list[CodeEntity],
+    ) -> None:
+        if not classes:
+            return
+        session.execute_write(
+            _write_classes,
+            rows=[
+                {
+                    **_entity_props(e, repo_id, _entity_id(repo_id, e.file_path, e.qualified_name)),
+                    "file_id": _file_id(repo_id, e.file_path),
+                }
+                for e in classes
+            ],
+        )
 
-                    if unresolved:
-                        unresolved_rows.append(
-                            {
-                                "file_id": _file_id(repo_id, file_entity.file_path),
-                                "unresolved_imports": unresolved,
-                            }
-                        )
+    def _ingest_function_nodes(
+        self,
+        session: Any,
+        repo_id: str,
+        functions: list[CodeEntity],
+    ) -> None:
+        if not functions:
+            return
+        session.execute_write(
+            _write_functions,
+            rows=[
+                {
+                    **_entity_props(e, repo_id, _entity_id(repo_id, e.file_path, e.qualified_name)),
+                    "file_id": _file_id(repo_id, e.file_path),
+                }
+                for e in functions
+            ],
+        )
 
-                if import_rows:
-                    session.execute_write(_write_import_edges, rows=import_rows)
-                if unresolved_rows:
-                    session.execute_write(_write_unresolved_imports, rows=unresolved_rows)
+    def _ingest_method_nodes(
+        self,
+        session: Any,
+        repo_id: str,
+        methods: list[CodeEntity],
+    ) -> None:
+        if not methods:
+            return
+        session.execute_write(
+            _write_methods,
+            rows=[
+                {
+                    **_entity_props(e, repo_id, _entity_id(repo_id, e.file_path, e.qualified_name)),
+                    "parent_id": _entity_id(repo_id, e.file_path, e.parent) if e.parent else None,
+                }
+                for e in methods
+            ],
+        )
 
-            # 7. Call graph edges
-            all_callables = functions + methods
-            if all_callables:
-                known: dict[str, tuple[str, str]] = {
-                    e.qualified_name: (
-                        _entity_id(repo_id, e.file_path, e.qualified_name),
-                        "Function" if e.type == "function" else "Method",
+    def _ingest_import_edges(
+        self,
+        session: Any,
+        repo_id: str,
+        files: list[CodeEntity],
+    ) -> None:
+        if not files:
+            return
+        known_files: dict[str, str] = {e.file_path: _file_id(repo_id, e.file_path) for e in files}
+        import_rows: list[dict[str, object]] = []
+        unresolved_rows: list[dict[str, object]] = []
+
+        for file_entity in files:
+            unresolved: list[str] = []
+            for imp in file_entity.imports:
+                target_id = _resolve_import(imp, known_files)
+                if target_id is not None:
+                    import_rows.append(
+                        {
+                            "source_id": _file_id(repo_id, file_entity.file_path),
+                            "target_id": target_id,
+                        }
                     )
-                    for e in all_callables
-                }
-                call_triples = extract_calls(all_callables)
-                call_rows: list[dict[str, object]] = []
-                for caller_qn, caller_fp, callee_name in call_triples:
-                    caller_id = _entity_id(repo_id, caller_fp, caller_qn)
-                    if callee_name not in known:
-                        continue
-                    callee_id, _ = known[callee_name]
-                    call_rows.append({"caller_id": caller_id, "callee_id": callee_id})
-                if call_rows:
-                    session.execute_write(_write_call_edges, rows=call_rows)
+                else:
+                    unresolved.append(imp)
+            if unresolved:
+                unresolved_rows.append(
+                    {
+                        "file_id": _file_id(repo_id, file_entity.file_path),
+                        "unresolved_imports": unresolved,
+                    }
+                )
+
+        if import_rows:
+            session.execute_write(_write_import_edges, rows=import_rows)
+        if unresolved_rows:
+            session.execute_write(_write_unresolved_imports, rows=unresolved_rows)
+
+    def _ingest_call_edges(
+        self,
+        session: Any,
+        repo_id: str,
+        callables: list[CodeEntity],
+    ) -> None:
+        if not callables:
+            return
+        known: dict[str, tuple[str, str]] = {
+            e.qualified_name: (
+                _entity_id(repo_id, e.file_path, e.qualified_name),
+                "Function" if e.type == "function" else "Method",
+            )
+            for e in callables
+        }
+        call_rows: list[dict[str, object]] = [
+            {
+                "caller_id": _entity_id(repo_id, caller_fp, caller_qn),
+                "callee_id": known[callee_name][0],
+            }
+            for caller_qn, caller_fp, callee_name in extract_calls(callables)
+            if callee_name in known
+        ]
+        if call_rows:
+            session.execute_write(_write_call_edges, rows=call_rows)
 
     # ------------------------------------------------------------------
     # Read queries
@@ -367,6 +394,102 @@ class GraphStore:
                 file_id=file_id,
             )
             return [dict(record["importer"]) for record in result]
+
+    def get_graph(self, repo_id: str) -> dict[str, list[dict[str, object]]]:
+        """Return all nodes and edges for a repository (for visualisation).
+
+        Returns a dict with two keys:
+        - ``nodes``: list of ``{id, label, properties}`` dicts.
+        - ``edges``: list of ``{source, target, type}`` dicts.
+        """
+        with self._driver.session() as session:
+            nodes_result = session.run(
+                """
+                MATCH (n)
+                WHERE n.repo_id = $repo_id OR (n:Repository AND n.id = $repo_id)
+                RETURN n, labels(n) AS labels
+                """,
+                repo_id=repo_id,
+            )
+            nodes: list[dict[str, object]] = [
+                {
+                    "id": record["n"]["id"],
+                    "label": record["labels"][0] if record["labels"] else "Unknown",
+                    "properties": dict(record["n"]),
+                }
+                for record in nodes_result
+            ]
+
+            edges_result = session.run(
+                """
+                MATCH (src)-[r]->(tgt)
+                WHERE (src.repo_id = $repo_id OR (src:Repository AND src.id = $repo_id))
+                  AND (tgt.repo_id = $repo_id OR (tgt:Repository AND tgt.id = $repo_id))
+                RETURN src.id AS source, type(r) AS rel_type, tgt.id AS target
+                """,
+                repo_id=repo_id,
+            )
+            edges: list[dict[str, object]] = [
+                {"source": record["source"], "target": record["target"], "type": record["rel_type"]}
+                for record in edges_result
+            ]
+
+        return {"nodes": nodes, "edges": edges}
+
+    def get_repo_stats(self, repo_id: str) -> dict[str, int]:
+        """Return node-type and relationship counts for *repo_id*."""
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (n)
+                WHERE n.repo_id = $repo_id OR (n:Repository AND n.id = $repo_id)
+                RETURN labels(n)[0] AS label, count(n) AS cnt
+                """,
+                repo_id=repo_id,
+            )
+            counts: dict[str, int] = {record["label"]: record["cnt"] for record in result}
+
+            rel_result = session.run(
+                """
+                MATCH (src)-[r]->(tgt)
+                WHERE (src.repo_id = $repo_id OR (src:Repository AND src.id = $repo_id))
+                  AND (tgt.repo_id = $repo_id OR (tgt:Repository AND tgt.id = $repo_id))
+                RETURN count(r) AS cnt
+                """,
+                repo_id=repo_id,
+            )
+            rel_record = rel_result.single()
+            counts["relationships"] = rel_record["cnt"] if rel_record else 0
+
+        return counts
+
+    def delete_repo(self, repo_id: str) -> int:
+        """Delete all nodes (and their relationships) for *repo_id*.
+
+        Returns the number of nodes deleted.
+        """
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (n)
+                WHERE n.repo_id = $repo_id OR (n:Repository AND n.id = $repo_id)
+                DETACH DELETE n
+                RETURN count(n) AS deleted
+                """,
+                repo_id=repo_id,
+            )
+            record = result.single()
+            return int(record["deleted"]) if record else 0
+
+    def cypher_read(
+        self,
+        cypher: str,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Execute an arbitrary read-only Cypher query and return rows as dicts."""
+        with self._driver.session() as session:
+            result = session.run(cypher, **(params or {}))
+            return [dict(record) for record in result]
 
     def get_context(self, function_id: str) -> dict[str, object]:
         """Return callers, callees, file, and parent_class for a function/method.

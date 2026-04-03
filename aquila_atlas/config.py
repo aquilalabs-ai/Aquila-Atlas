@@ -26,8 +26,29 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
 
-    # Valkey (Redis-compatible)
-    valkey_url: str = "valkey://localhost:6379"
+    # PostgreSQL (session store)
+    postgres_url: str = "postgresql://aquila:aquila@localhost:5432/aquila"
+
+    # Neo4j MCP server (HTTP transport)
+    mcp_url: str = "http://localhost:8080/mcp"
+
+    # API server
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_key: str = ""  # leave blank to disable auth (dev mode)
+
+    # CORS — comma-separated allowed origins for the frontend
+    # Default covers the Vite dev server ports
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+    # Conversation compaction — summarise history when it exceeds this many tokens
+    # (estimated at 4 chars per token). The last 4 messages (2 turns) are always
+    # kept verbatim; older messages are replaced by an LLM-generated summary.
+    max_history_tokens: int = 4000
+
+    # LangSmith (optional — leave blank to disable tracing)
+    langsmith_api_key: str = ""
+    langsmith_project: str = "aquila-atlas"
 
 
 settings = Settings()

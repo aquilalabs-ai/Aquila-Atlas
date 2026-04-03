@@ -210,3 +210,11 @@ CLAUDE.md
 .claude
 ROADMAP.md
 MEMO*
+COMMANDS.md
+.mcp.json
+Bn
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
