@@ -31,7 +31,7 @@ def search(
     svc: Svc,
     _auth: Auth,
     q: str = Query(..., description="Natural language search query"),
-    top_k: int = Query(10, ge=1, le=50, description="Maximum number of results (1–50)"),
+    top_k: int = Query(10, ge=1, le=50, description="Maximum number of results (1-50)"),
     file: str | None = Query(None, description="Filter by exact file path"),
     chunk_type: str | None = Query(
         None, description="Filter by entity type: `file`, `class`, `function`, `method`"

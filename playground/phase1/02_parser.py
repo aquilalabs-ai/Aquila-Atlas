@@ -36,7 +36,7 @@ print(f"Entities found: {len(entities)}\n")
 print(f"{'TYPE':<10} {'QUALIFIED NAME':<45} {'LINES':<12} {'VIS':<10} {'ASYNC'}")
 print("-" * 90)
 for e in entities:
-    lines = f"{e.start_line}–{e.end_line}"
+    lines = f"{e.start_line}-{e.end_line}"
     async_tag = "yes" if e.is_async else ""
     print(f"{e.type:<10} {e.qualified_name:<45} {lines:<12} {e.visibility:<10} {async_tag}")
 
@@ -51,7 +51,7 @@ fn = next((e for e in entities if e.type == "function"), None)
 if fn:
     print(f"Name       : {fn.name}")
     print(f"Qualified  : {fn.qualified_name}")
-    print(f"Lines      : {fn.start_line}–{fn.end_line}")
+    print(f"Lines      : {fn.start_line}-{fn.end_line}")
     print(f"Visibility : {fn.visibility}")
     print(f"Async      : {fn.is_async}")
     print(f"Decorators : {fn.decorators}")

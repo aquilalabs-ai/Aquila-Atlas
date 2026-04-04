@@ -55,7 +55,7 @@ def _llm_complete(llm: Any, model: str, system: str, user: str, max_tokens: int 
 class SemanticSearchInput(BaseModel):
     query: str = Field(description="Natural language search query about the codebase")
     repo_id: str = Field(description="Repository ID to search within")
-    top_k: int = Field(default=5, description="Number of results to return (1–20)")
+    top_k: int = Field(default=5, description="Number of results to return (1-20)")
     chunk_type: str | None = Field(
         default=None,
         description="Optionally filter by chunk type: 'file', 'class', 'function', or 'method'",
@@ -179,7 +179,7 @@ class FileReaderTool(BaseTool):
 
         header = f"# {file_path}  ({len(chunks)} chunks)\n\n"
         sections = [
-            f"# Lines {c.start_line}–{c.end_line} [{c.chunk_type}]\n{c.content}" for c in chunks
+            f"# Lines {c.start_line}-{c.end_line} [{c.chunk_type}]\n{c.content}" for c in chunks
         ]
         return header + "\n\n---\n\n".join(sections)
 

@@ -47,7 +47,7 @@ def _print_results(label: str, resp: httpx.Response) -> None:
     for i, r in enumerate(results[:5], 1):
         score = r.get("score", 0.0)
         path = r.get("file_path", "")
-        lines = f"{r.get('start_line')}–{r.get('end_line')}"
+        lines = f"{r.get('start_line')}-{r.get('end_line')}"
         name = r.get("qualified_name", "")
         lang = r.get("language", "")
         print(f"  [{i}] score={score:.4f}  {path}:{lines}  {name}  ({lang})")

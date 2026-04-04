@@ -315,14 +315,3 @@ uv run pytest --cov
 - **VS Code extension** — Inline chat, "Explain this function", "Find usages"
 
 ---
-
-## Docs
-
-Detailed technical memos for each phase:
-
-| File | Contents |
-|------|---------|
-| [docs/phase3-reasoning-layer.md](docs/phase3-reasoning-layer.md) | LangGraph agent, tools, MCP wrappers, chains, CLI |
-| [docs/phase4-api-and-ui.md](docs/phase4-api-and-ui.md) | FastAPI endpoints, SSE format, React UI, Zustand store, multi-source ingestion |
-
-See [ROADMAP.md](ROADMAP.md) for the full project roadmap.

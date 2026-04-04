@@ -6,7 +6,7 @@ import {
   RefreshCw,
   Sun,
   Moon,
-  Telescope,
+//  Telescope,
   ChevronRight,
   MessageSquare,
   PenLine,
@@ -17,6 +17,7 @@ import { useSessionList, useCreateSession, useDeleteSession } from '@/hooks/useS
 import { useAppStore } from '@/store/app'
 import { RepoConnectDialog } from './RepoConnectDialog'
 import { cn } from '@/lib/utils'
+import logo from '@/assets/images/aquila-text.svg'
 
 // ---------------------------------------------------------------------------
 // Session list for the active repo
@@ -167,14 +168,17 @@ export function Sidebar() {
     <aside className="flex w-56 flex-shrink-0 flex-col border-r border-border-default bg-canvas-overlay">
       {/* Brand */}
       <div className="flex h-12 items-center gap-2 border-b border-border-default px-3">
-        <Telescope className="h-4 w-4 flex-shrink-0 text-accent-fg" />
+        {/* <Telescope className="h-4 w-4 flex-shrink-0 text-accent-fg" /> */}
+        <img src={logo} alt="Aquila Atlas" className="h-12" />
+        
         <span className="flex-1 text-sm font-semibold tracking-tight text-fg-default">
-          Aquila-Atlas
+          Aquila Atlas
         </span>
+
         <button
           onClick={() => void refetch()}
           title="Refresh"
-          className="rounded p-1 text-fg-subtle transition-colors hover:bg-canvas-subtle hover:text-fg-default"
+          className="rounded p-1 text-fg-subtle hover:bg-canvas-subtle hover:text-fg-default"
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </button>
