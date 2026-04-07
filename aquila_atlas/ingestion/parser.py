@@ -34,16 +34,26 @@ def _decorators(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> 
 
 
 def _extract_imports(tree: ast.Module) -> tuple[str, ...]:
-    """Return all top-level import targets as dotted strings."""
+    """Return all top-level imported *modules* as dotted strings.
+
+    For ``import foo.bar`` we record ``foo.bar``.
+    For ``from foo.bar import Baz`` we record ``foo.bar`` (the module, not the
+    symbol), since ``_resolve_import`` maps dotted names to file paths — appending
+    the symbol name would produce an unresolvable path like ``foo/bar/Baz.py``.
+    """
+    seen: set[str] = set()
     result: list[str] = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                result.append(alias.name)
+                if alias.name not in seen:
+                    seen.add(alias.name)
+                    result.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            for alias in node.names:
-                result.append(f"{module}.{alias.name}" if module else alias.name)
+            if module and module not in seen:
+                seen.add(module)
+                result.append(module)
     return tuple(result)
 
 

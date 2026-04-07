@@ -124,8 +124,13 @@ class GraphStore:
     """Synchronous Neo4j graph store for code knowledge graphs."""
 
     def __init__(self, uri: str, user: str, password: str) -> None:
+        import logging  # noqa: PLC0415
+
         import neo4j  # noqa: PLC0415
 
+        # Suppress schema-warning notifications (e.g. 01N51 "relationship type not in DB")
+        # that fire on OPTIONAL MATCH when a rel-type hasn't been created yet.
+        logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
         self._driver: neo4j.Driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
 
     # ------------------------------------------------------------------
@@ -530,6 +535,90 @@ class GraphStore:
             }
 
 
+    # ------------------------------------------------------------------
+    # Graph-aware documentation helpers
+    # ------------------------------------------------------------------
+
+    def get_import_graph(self, repo_id: str) -> list[tuple[str, str]]:
+        """Return ``(importer_file_path, imported_file_path)`` for all intra-repo imports."""
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (src:File {repo_id: $repo_id})-[:IMPORTS]->(tgt:File {repo_id: $repo_id})
+                RETURN src.file_path AS src_path, tgt.file_path AS tgt_path
+                """,
+                repo_id=repo_id,
+            )
+            return [(record["src_path"], record["tgt_path"]) for record in result]
+
+    def get_file_graph_context(self, repo_id: str, file_path: str) -> dict[str, Any]:
+        """Return graph neighbourhood for a file: imports, importers, in_degree, symbols."""
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (f:File {repo_id: $repo_id, file_path: $file_path})
+                OPTIONAL MATCH (f)-[:IMPORTS]->(imp:File)
+                OPTIONAL MATCH (importer:File)-[:IMPORTS]->(f)
+                OPTIONAL MATCH (f)-[:DEFINES]->(sym)
+                RETURN
+                    collect(DISTINCT imp.file_path) AS imports,
+                    collect(DISTINCT importer.file_path) AS importers,
+                    collect(DISTINCT sym.qualified_name) AS defines
+                """,
+                repo_id=repo_id,
+                file_path=file_path,
+            )
+            record = result.single()
+            if record is None:
+                return {"imports": [], "importers": [], "defines": [], "in_degree": 0}
+            imports = [p for p in record["imports"] if p is not None]
+            importers = [p for p in record["importers"] if p is not None]
+            return {
+                "imports": imports,
+                "importers": importers,
+                "defines": [s for s in record["defines"] if s is not None],
+                "in_degree": len(importers),
+            }
+
+    def get_entry_points(self, repo_id: str) -> list[dict[str, Any]]:
+        """Return public functions/methods with no incoming CALLS edges (entry points)."""
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (fn {repo_id: $repo_id})
+                WHERE (fn:Function OR fn:Method)
+                  AND fn.visibility = 'public'
+                  AND NOT EXISTS { MATCH ()-[:CALLS]->(fn) }
+                RETURN fn.qualified_name AS name, fn.file_path AS file_path,
+                       labels(fn)[0] AS kind
+                ORDER BY fn.file_path, fn.qualified_name
+                LIMIT 30
+                """,
+                repo_id=repo_id,
+            )
+            return [dict(record) for record in result]
+
+    def get_call_chain(
+        self, repo_id: str, start_id: str, max_depth: int = 6
+    ) -> list[dict[str, Any]]:
+        """BFS via CALLS edges up to *max_depth* hops from *start_id*."""
+        with self._driver.session() as session:
+            depth = max(1, min(max_depth, 10))
+            result = session.run(
+                f"""
+                MATCH path = (start)-[:CALLS*1..{depth}]->(callee)
+                WHERE start.id = $start_id AND callee.repo_id = $repo_id
+                RETURN callee.qualified_name AS name,
+                       callee.file_path AS file_path,
+                       length(path) AS depth
+                ORDER BY depth, callee.file_path
+                """,
+                start_id=start_id,
+                repo_id=repo_id,
+            )
+            return [dict(record) for record in result]
+
+
 # ---------------------------------------------------------------------------
 # Private Cypher transaction functions
 # ---------------------------------------------------------------------------
@@ -675,23 +764,29 @@ def _write_call_edges(
 def _resolve_import(import_str: str, known_files: dict[str, str]) -> str | None:
     """Try to map a dotted import string to a known file ID.
 
-    Attempts two strategies:
-    1. Direct suffix match — ``"aquila_atlas.ingestion.parser"`` →
-       ``"aquila_atlas/ingestion/parser.py"``.
-    2. Package init match — ``"aquila_atlas.ingestion"`` →
-       ``"aquila_atlas/ingestion/__init__.py"``.
+    Works regardless of whether the repo was ingested from the package root
+    (paths like ``aquila_atlas/ingestion/parser.py``) or from inside the package
+    (paths like ``ingestion/parser.py`` when the loader root was the package dir).
+
+    For each candidate shape (module.py and package/__init__.py) we check:
+    - exact match
+    - candidate ends with stored path  (stored path is a suffix — repo rooted deeper)
+    - stored path ends with candidate  (candidate is a suffix — import has package prefix)
     """
-    candidate_path = import_str.replace(".", "/") + ".py"
-    for file_path, file_id in known_files.items():
-        if file_path == candidate_path or file_path.endswith("/" + candidate_path):
-            return file_id
 
-    init_path = import_str.replace(".", "/") + "/__init__.py"
-    for file_path, file_id in known_files.items():
-        if file_path == init_path or file_path.endswith("/" + init_path):
-            return file_id
+    def _match(candidate: str) -> str | None:
+        for file_path, file_id in known_files.items():
+            if (
+                file_path == candidate
+                or candidate.endswith("/" + file_path)
+                or file_path.endswith("/" + candidate)
+            ):
+                return file_id
+        return None
 
-    return None
+    return _match(import_str.replace(".", "/") + ".py") or _match(
+        import_str.replace(".", "/") + "/__init__.py"
+    )
 
 
 # ---------------------------------------------------------------------------

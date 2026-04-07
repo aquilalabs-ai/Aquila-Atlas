@@ -1,43 +1,72 @@
+import { useState } from 'react'
 import { Toaster } from 'sonner'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatPanel } from '@/components/ChatPanel'
+import { DocsPanel } from '@/components/DocsPanel'
 import { SourceViewer } from '@/components/SourceViewer'
 import { EmptyState } from '@/components/EmptyState'
 import { useAppStore } from '@/store/app'
+import { cn } from '@/lib/utils'
+
+type MainTab = 'chat' | 'docs'
 
 export default function App() {
   const activeRepoId   = useAppStore((s) => s.activeRepoId)
   const sourceLocation = useAppStore((s) => s.sourceLocation)
   const theme          = useAppStore((s) => s.theme)
+  const [mainTab, setMainTab] = useState<MainTab>('chat')
 
   return (
     <ThemeProvider>
-      {/* Full-height flex layout */}
       <div className="flex h-screen overflow-hidden bg-canvas-default text-fg-default">
-        {/* Left sidebar — always visible */}
         <Sidebar />
 
-        {/* Main content area */}
-        <main className="flex flex-1 overflow-hidden">
+        <main className="flex flex-1 flex-col overflow-hidden">
           {activeRepoId ? (
-            <ChatPanel repoId={activeRepoId} />
+            <>
+              {/* Tab bar */}
+              <div className="flex h-10 flex-shrink-0 items-center border-b border-border-default px-4 gap-0">
+                {(['chat', 'docs'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setMainTab(tab)}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-medium transition-colors capitalize',
+                      mainTab === tab
+                        ? 'border-b-2 border-accent-emphasis text-accent-fg'
+                        : 'text-fg-muted hover:text-fg-default',
+                    )}
+                  >
+                    {tab === 'chat' ? 'Chat' : 'Docs'}
+                  </button>
+                ))}
+                <span className="ml-3 text-xs text-fg-subtle font-medium">{activeRepoId}</span>
+              </div>
+
+              {/* Content */}
+              <div className="flex flex-1 overflow-hidden">
+                {mainTab === 'chat' ? (
+                  <ChatPanel repoId={activeRepoId} />
+                ) : (
+                  <DocsPanel repoId={activeRepoId} />
+                )}
+
+                {sourceLocation && (
+                  <SourceViewer
+                    repoId={sourceLocation.repoId}
+                    filePath={sourceLocation.filePath}
+                    line={sourceLocation.line}
+                  />
+                )}
+              </div>
+            </>
           ) : (
             <EmptyState />
-          )}
-
-          {/* Source viewer slides in from the right when a citation is clicked */}
-          {sourceLocation && (
-            <SourceViewer
-              repoId={sourceLocation.repoId}
-              filePath={sourceLocation.filePath}
-              line={sourceLocation.line}
-            />
           )}
         </main>
       </div>
 
-      {/* Toast notifications */}
       <Toaster
         theme={theme}
         position="bottom-right"

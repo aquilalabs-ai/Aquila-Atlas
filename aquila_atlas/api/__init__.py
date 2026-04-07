@@ -38,7 +38,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from aquila_atlas.api.routers import chat, files, graph, health, ingestion, repos, search
+from aquila_atlas.api.routers import chat, docs, files, graph, health, ingestion, repos, search
 
 if TYPE_CHECKING:
     from aquila_atlas.reasoning.agent import CodebaseAgent
@@ -65,7 +65,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.sessions: dict[str, CodebaseAgent] = {}
     app.state.session_meta: dict[str, dict] = {}  # session_id → metadata (title, created_at, …)
 
-    # Valkey-backed session store — persists history across server restarts
+    # Session store — persists chat history across restarts
     try:
         app.state.store = create_store(get_settings().postgres_url)
         _log.info("Session store connected to PostgreSQL at %s", get_settings().postgres_url)
@@ -74,6 +74,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "PostgreSQL unavailable — sessions will not persist across restarts", exc_info=True
         )
         app.state.store = None
+
+    # Doc store — persists generated documentation across restarts
+    from aquila_atlas.api.store import create_doc_store  # noqa: PLC0415
+
+    try:
+        app.state.doc_store = create_doc_store(get_settings().postgres_url)
+        _log.info("Doc store connected to PostgreSQL")
+    except Exception:
+        _log.warning("PostgreSQL unavailable — docs will not persist across restarts", exc_info=True)
+        app.state.doc_store = None
 
     # Load MCP tools once at startup so every chat session gets them
     try:
@@ -145,6 +155,14 @@ _TAG_METADATA = [
             "Access the Neo4j knowledge graph. Retrieve full graph data for "
             "visualisation, fetch aggregated statistics, or execute arbitrary "
             "read-only Cypher queries."
+        ),
+    },
+    {
+        "name": "Documentation",
+        "description": (
+            "AI-powered multi-file documentation generation. Submit async jobs with "
+            "scope (architecture, per_module, per_file, subsystem, flows), style, and "
+            "language. Poll for progress, download as ZIP, and browse saved docs."
         ),
     },
 ]
@@ -233,6 +251,7 @@ def create_app() -> FastAPI:
     application.include_router(search.router)
     application.include_router(chat.router)
     application.include_router(graph.router)
+    application.include_router(docs.router)
 
     return application
 

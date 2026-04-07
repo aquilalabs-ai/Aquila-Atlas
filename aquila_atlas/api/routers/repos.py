@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, UploadFile, status
 
 from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
@@ -124,6 +124,7 @@ def repo_stats(repo_id: str, svc: Svc, _auth: Auth) -> RepoStatsResponse:
     summary="Delete a repo",
     description=(
         "Permanently removes all graph nodes and vector chunks associated with *repo_id*. "
+        "Optionally also purges stored chat sessions and/or documentation via query params. "
         "This operation is **irreversible** — re-ingest to restore the data."
     ),
     responses={
@@ -131,15 +132,48 @@ def repo_stats(repo_id: str, svc: Svc, _auth: Auth) -> RepoStatsResponse:
         404: {"model": ErrorResponse, "description": "Repo not found"},
     },
 )
-def delete_repo(repo_id: str, svc: Svc, _auth: Auth) -> DeleteRepoResponse:
+def delete_repo(
+    repo_id: str,
+    request: Request,
+    svc: Svc,
+    _auth: Auth,
+    delete_sessions: bool = Query(False, description="Also delete all chat sessions for this repo"),
+    delete_docs: bool = Query(False, description="Also delete all saved documentation for this repo"),
+) -> DeleteRepoResponse:
     if repo_id not in svc.list_repo_ids():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Repo '{repo_id}' not found",
         )
     result = svc.delete_repo(repo_id)
+
+    sessions_deleted = 0
+    docs_deleted = 0
+
+    if delete_sessions:
+        from aquila_atlas.api.store import SessionStore  # noqa: PLC0415
+
+        store = getattr(request.app.state, "store", None)
+        if isinstance(store, SessionStore):
+            sessions_deleted = store.delete_all_repo_sessions(repo_id)
+
+    if delete_docs:
+        from aquila_atlas.api.store import DocStore  # noqa: PLC0415
+        from aquila_atlas.api.routers.docs import _doc_jobs  # noqa: PLC0415
+
+        # Purge in-memory doc jobs for this repo
+        to_remove = [jid for jid, rec in _doc_jobs.items() if rec.repo_id == repo_id]
+        for jid in to_remove:
+            del _doc_jobs[jid]
+
+        doc_store = getattr(request.app.state, "doc_store", None)
+        if isinstance(doc_store, DocStore):
+            docs_deleted = doc_store.delete_all_repo_docs(repo_id)
+
     return DeleteRepoResponse(
         repo_id=repo_id,
         graph_nodes_deleted=result["graph_nodes_deleted"],
         vector_chunks_deleted=result["vector_chunks_deleted"],
+        sessions_deleted=sessions_deleted,
+        docs_deleted=docs_deleted,
     )

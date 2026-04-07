@@ -84,6 +84,8 @@ class DeleteRepoResponse(BaseModel):
     repo_id: str
     graph_nodes_deleted: int
     vector_chunks_deleted: int
+    sessions_deleted: int = 0
+    docs_deleted: int = 0
 
     model_config = {
         "json_schema_extra": {
@@ -92,6 +94,8 @@ class DeleteRepoResponse(BaseModel):
                     "repo_id": "my-service",
                     "graph_nodes_deleted": 208,
                     "vector_chunks_deleted": 198,
+                    "sessions_deleted": 5,
+                    "docs_deleted": 2,
                 }
             ]
         }
@@ -594,6 +598,161 @@ class CypherResponse(BaseModel):
                     "rows": [{"name": "authenticate_user", "file": "src/auth/service.py"}],
                     "total": 1,
                 }
+            ]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Documentation generation
+# ---------------------------------------------------------------------------
+
+
+class DocGenRequest(BaseModel):
+    scope: str = Field(
+        "architecture",
+        description=(
+            "Documentation scope: "
+            '"architecture" | "per_module" | "per_file" | "subsystem" | "flows"'
+        ),
+    )
+    style: str = Field("technical", description='"technical" (developer) or "functional" (PM/QA)')
+    language: str = Field("en", description="ISO-639-1 language code (en, fr, es, de, zh, ja, pt, ar)")
+    targets: list[str] | None = Field(None, description="Optional list of specific files/modules to document")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"scope": "architecture", "style": "technical", "language": "en"},
+                {"scope": "per_module", "style": "functional", "language": "fr"},
+                {"scope": "subsystem", "style": "technical", "language": "en"},
+                {"scope": "flows", "style": "technical", "language": "en"},
+            ]
+        }
+    }
+
+
+class DocGenResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    status: str = Field(..., description='"queued" immediately after submission')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "status": "queued",
+                }
+            ]
+        }
+    }
+
+
+class DocJobStatus(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    style: str
+    language: str
+    status: str = Field(..., description='"queued" | "running" | "done" | "failed"')
+    completed: int = Field(0)
+    total: int = Field(0)
+    current_target: str | None = Field(None)
+    error: str | None = Field(None)
+    files: list[str] = Field(default_factory=list, description="Generated filenames (populated on done)")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "architecture",
+                    "style": "technical",
+                    "language": "en",
+                    "status": "running",
+                    "completed": 2,
+                    "total": 5,
+                    "current_target": "api",
+                    "error": None,
+                    "files": [],
+                }
+            ]
+        }
+    }
+
+
+class DocContentResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    style: str
+    language: str
+    files: dict[str, str] = Field(..., description="filename → markdown content")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "architecture",
+                    "style": "technical",
+                    "language": "en",
+                    "files": {"architecture.md": "# Architecture\n..."},
+                }
+            ]
+        }
+    }
+
+
+class DocMetadata(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    style: str
+    language: str
+    created_at: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "architecture",
+                    "style": "technical",
+                    "language": "en",
+                    "created_at": "2026-04-03T10:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class DocListResponse(BaseModel):
+    repo_id: str
+    docs: list[DocMetadata]
+    total: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{"repo_id": "my-service", "docs": [], "total": 0}]
+        }
+    }
+
+
+class DocDeleteResponse(BaseModel):
+    success: bool
+    job_id: str
+    message: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"success": True, "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "message": "Deleted"}
             ]
         }
     }

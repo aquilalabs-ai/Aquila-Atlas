@@ -63,6 +63,54 @@
   ::-webkit-scrollbar-thumb:hover { @apply bg-fg-subtle; }
 }
 
+/* GitHub-like rendered markdown (documentation viewer) */
+.prose-github {
+  @apply text-fg-default text-sm leading-relaxed;
+}
+.prose-github h1,
+.prose-github h2,
+.prose-github h3,
+.prose-github h4,
+.prose-github h5,
+.prose-github h6 {
+  @apply font-semibold text-fg-default mt-6 mb-4;
+}
+.prose-github h1:first-child,
+.prose-github h2:first-child { @apply mt-0; }
+.prose-github h1 { @apply text-2xl pb-2 border-b border-border-default; }
+.prose-github h2 { @apply text-xl pb-2 border-b border-border-default; }
+.prose-github h3 { @apply text-lg; }
+.prose-github h4 { @apply text-base; }
+.prose-github h5,
+.prose-github h6 { @apply text-sm text-fg-muted; }
+.prose-github p  { @apply mb-4 last:mb-0; }
+.prose-github ul { @apply mb-4 list-disc pl-6; }
+.prose-github ol { @apply mb-4 list-decimal pl-6; }
+.prose-github li { @apply mb-1; }
+.prose-github li > ul,
+.prose-github li > ol { @apply mt-1 mb-0; }
+.prose-github a  { @apply text-accent-fg hover:underline; }
+.prose-github strong { @apply font-semibold text-fg-default; }
+.prose-github em { @apply italic; }
+.prose-github code {
+  @apply rounded px-1 py-0.5 font-mono bg-canvas-subtle text-fg-default;
+  font-size: 85%;
+}
+.prose-github pre {
+  @apply bg-canvas-overlay border border-border-default rounded-md mb-4 overflow-x-auto;
+}
+.prose-github pre code { @apply bg-transparent p-0 text-xs; }
+.prose-github blockquote {
+  @apply border-l-4 border-border-default text-fg-muted pl-4 my-4;
+}
+.prose-github hr { @apply border-border-default my-6; }
+.prose-github table { @apply w-full border-collapse mb-4 text-sm; }
+.prose-github th,
+.prose-github td { @apply border border-border-default px-3 py-1.5; }
+.prose-github th { @apply bg-canvas-subtle font-semibold text-left; }
+.prose-github tbody tr:nth-child(even) { @apply bg-canvas-subtle; }
+.prose-github img { @apply max-w-full rounded-md; }
+
 /* Prose overrides for chat messages */
 .prose-chat {
   @apply text-fg-default text-sm leading-relaxed;

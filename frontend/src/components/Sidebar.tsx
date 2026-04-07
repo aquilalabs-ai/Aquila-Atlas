@@ -20,6 +20,78 @@ import { cn } from '@/lib/utils'
 import logo from '@/assets/images/aquila-text.svg'
 
 // ---------------------------------------------------------------------------
+// Delete repo confirmation dialog
+// ---------------------------------------------------------------------------
+
+function DeleteRepoDialog({
+  repoId,
+  onConfirm,
+  onCancel,
+}: {
+  repoId: string
+  onConfirm: (opts: { deleteSessions: boolean; deleteDocs: boolean }) => void
+  onCancel: () => void
+}) {
+  const [deleteSessions, setDeleteSessions] = useState(false)
+  const [deleteDocs, setDeleteDocs] = useState(false)
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onCancel}
+    >
+      <div
+        className="w-80 rounded-lg border border-border-default bg-canvas-overlay p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-1 text-sm font-semibold text-fg-default">Delete repository</h3>
+        <p className="mb-4 text-xs text-fg-muted">
+          Permanently remove all graph nodes and vector chunks for{' '}
+          <span className="font-mono font-medium text-fg-default">{repoId}</span>.
+          This cannot be undone.
+        </p>
+
+        <div className="mb-5 space-y-2">
+          <label className="flex cursor-pointer items-center gap-2.5">
+            <input
+              type="checkbox"
+              checked={deleteSessions}
+              onChange={(e) => setDeleteSessions(e.target.checked)}
+              className="h-3.5 w-3.5 accent-danger-fg"
+            />
+            <span className="text-xs text-fg-default">Also delete conversations</span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-2.5">
+            <input
+              type="checkbox"
+              checked={deleteDocs}
+              onChange={(e) => setDeleteDocs(e.target.checked)}
+              className="h-3.5 w-3.5 accent-danger-fg"
+            />
+            <span className="text-xs text-fg-default">Also delete documentation</span>
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-md border border-border-default px-3 py-1.5 text-xs text-fg-muted hover:bg-canvas-subtle"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm({ deleteSessions, deleteDocs })}
+            className="rounded-md bg-danger-emphasis px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Session list for the active repo
 // ---------------------------------------------------------------------------
 
@@ -141,6 +213,7 @@ function SessionList({ repoId }: { repoId: string }) {
 
 export function Sidebar() {
   const [connectOpen, setConnectOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const { data, isLoading, refetch } = useRepoList()
   const deleteRepo                   = useDeleteRepo()
@@ -152,11 +225,17 @@ export function Sidebar() {
 
   const repos = data?.repos ?? []
 
-  async function handleDelete(e: React.MouseEvent, repoId: string) {
+  function handleDeleteClick(e: React.MouseEvent, repoId: string) {
     e.stopPropagation()
-    if (!confirm(`Delete "${repoId}"? This removes all graph and vector data.`)) return
+    setPendingDelete(repoId)
+  }
+
+  async function handleDeleteConfirm(opts: { deleteSessions: boolean; deleteDocs: boolean }) {
+    if (!pendingDelete) return
+    const repoId = pendingDelete
+    setPendingDelete(null)
     try {
-      await deleteRepo.mutateAsync(repoId)
+      await deleteRepo.mutateAsync({ repoId, ...opts })
       if (activeRepoId === repoId) setActiveRepo(null)
       toast.success(`Deleted "${repoId}"`)
     } catch {
@@ -217,10 +296,10 @@ export function Sidebar() {
                   <span
                     role="button"
                     tabIndex={0}
-                    onClick={(e) => void handleDelete(e, repo)}
+                    onClick={(e) => handleDeleteClick(e, repo)}
                     onKeyDown={(e) =>
                       e.key === 'Enter' &&
-                      void handleDelete(e as unknown as React.MouseEvent, repo)
+                      handleDeleteClick(e as unknown as React.MouseEvent, repo)
                     }
                     className="hidden rounded p-0.5 text-danger-fg transition-colors hover:bg-canvas-default group-hover:block"
                     title="Delete repo"
@@ -263,6 +342,14 @@ export function Sidebar() {
       </div>
 
       <RepoConnectDialog open={connectOpen} onOpenChange={setConnectOpen} />
+
+      {pendingDelete && (
+        <DeleteRepoDialog
+          repoId={pendingDelete}
+          onConfirm={(opts) => void handleDeleteConfirm(opts)}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </aside>
   )
 }

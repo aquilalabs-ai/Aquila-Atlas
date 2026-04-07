@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aquila_atlas.config import Settings
@@ -96,14 +96,14 @@ class KnowledgeService:
             if not text:
                 return []
             try:
-                return json.loads(text)
+                return json.loads(text)  # type: ignore[no-any-return]
             except json.JSONDecodeError as exc:
                 raise RuntimeError(
                     "Unexpected MCP read-cypher output format; expected JSON"
                 ) from exc
         if isinstance(result, str):
             try:
-                return json.loads(result)
+                return json.loads(result)  # type: ignore[no-any-return]
             except json.JSONDecodeError as exc:
                 raise RuntimeError(
                     "Unexpected MCP read-cypher output format; expected JSON"
@@ -123,6 +123,28 @@ class KnowledgeService:
     def ingest_chunks(self, chunks: list[CodeChunk], repo_id: str) -> None:
         """Upsert code chunks into the vector store."""
         self.vector.upsert(chunks, repo_id)
+
+    # ------------------------------------------------------------------
+    # Graph-aware documentation helpers (pass-throughs to GraphStore)
+    # ------------------------------------------------------------------
+
+    def get_import_graph(self, repo_id: str) -> list[tuple[str, str]]:
+        """Return ``(importer_file_path, imported_file_path)`` for all intra-repo imports."""
+        return self.graph.get_import_graph(repo_id)
+
+    def get_file_graph_context(self, repo_id: str, file_path: str) -> dict[str, Any]:
+        """Return graph neighbourhood for a file: imports, importers, in_degree, symbols."""
+        return self.graph.get_file_graph_context(repo_id, file_path)
+
+    def get_entry_points(self, repo_id: str) -> list[dict[str, Any]]:
+        """Return public entry-point functions with no incoming CALLS edges."""
+        return self.graph.get_entry_points(repo_id)
+
+    def get_call_chain(
+        self, repo_id: str, start_id: str, max_depth: int = 6
+    ) -> list[dict[str, Any]]:
+        """BFS via CALLS edges up to *max_depth* hops from *start_id*."""
+        return self.graph.get_call_chain(repo_id, start_id, max_depth)
 
 
 # ---------------------------------------------------------------------------

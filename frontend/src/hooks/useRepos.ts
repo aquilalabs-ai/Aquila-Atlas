@@ -21,7 +21,8 @@ export function useRepoStats(repoId: string | null) {
 export function useDeleteRepo() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (repoId: string) => api.deleteRepo(repoId),
+    mutationFn: ({ repoId, deleteSessions, deleteDocs }: { repoId: string; deleteSessions?: boolean; deleteDocs?: boolean }) =>
+      api.deleteRepo(repoId, { deleteSessions, deleteDocs }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repos'] }),
   })
 }

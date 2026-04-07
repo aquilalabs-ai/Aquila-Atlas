@@ -85,161 +85,38 @@ def _msg_text(content: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompts
+# Prompt loader — reads .md files from the prompts/ directory next to this file
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT_BASE = """\
-You are Aquila, an expert AI assistant specialised in understanding codebases.
-Help developers navigate, understand, and reason about source code.
+_PROMPTS_DIR = __file__.replace("agent.py", "prompts")
 
-## Answer format
 
-- Be specific and cite file paths and function names from the retrieved context.
-- Format code references as `file_path:line_number`.
-- Keep answers concise and technical.
-- Never give generic answers like "I don't have enough information" or improvising with generic responses without trying to get more context first.
-- Always provide a substantive answer. If the pre-fetched context is not enough,
-  call a tool (semantic_search, file_reader, get-schema, read-cypher) to get more
-  information before responding — do not say you lack context without trying.
-- Only admit you cannot answer after you have tried at least one tool call.
-"""
+def _load_prompt(name: str) -> str:
+    """Load a prompt template from ``prompts/<name>.md``.
 
-# ---------------------------------------------------------------------------
-# Skills — focused prompt fragments loaded per query type
-# ---------------------------------------------------------------------------
+    Falls back to an empty string if the file is missing so the agent
+    degrades gracefully during development (e.g. before prompts are written).
+    """
+    import pathlib  # noqa: PLC0415
 
-_SKILL_ARCHITECTURE = """\
-## Skill: Architecture exploration
+    path = pathlib.Path(_PROMPTS_DIR) / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logger.warning("prompt file not found: %s", path)
+        return ""
 
-You are answering a structural or architectural question.
 
-The system message already contains pre-fetched code context — read it first \
-and use it to build your answer.
-
-1. Start from the pre-fetched context in the system message to understand the \
-   overall structure (modules, classes, entry points).
-2. If graph tools are available, call `read-cypher` for targeted traversals \
-   (callers, callees, import chains) — schema context is automatically provided.
-3. Use `semantic_search` to find additional relevant files or classes when the \
-   pre-fetched context is incomplete.
-4. Synthesise everything into a clear architectural overview.
-
-### Tool parameter reference
-- `get-schema` — no required parameters.
-- `read-cypher` — parameter: `query` (the Cypher read query string; schema context automatically retrieved).
-- `semantic_search` — parameters: `query`, `repo_id`, optional `top_k`, `chunk_type`.
-- `file_reader` — parameters: `file_path`, `repo_id`.
-
-### Strategy
-- Always answer from the pre-fetched context first; use tools to fill gaps.
-- You may call multiple tools in sequence to build a complete answer.
-- If a tool returns an error, adjust the query and retry.
-"""
-
-_SKILL_CODE_SEARCH = """\
-## Skill: Implementation search
-
-You are finding a specific piece of implementation.
-
-The system message already contains pre-fetched code context — read it first \
-before calling any tools.
-
-1. If the pre-fetched context answers the question, respond directly.
-2. Otherwise call `semantic_search` with a focused, specific query.
-3. Use `file_reader` when you need the full file rather than snippets.
-4. Use `read-cypher(query=...)` to trace callers/callees of a found function.
-5. If `semantic_search` returns empty, switch to `read-cypher` for graph \
-   traversal instead.
-
-### Tool parameter reference
-- `semantic_search` — parameters: `query`, `repo_id`, optional `top_k`, `chunk_type`.
-- `file_reader` — parameters: `file_path`, `repo_id`.
-- `read-cypher` — parameter: `query` (the Cypher read query string).
-
-### HARD stop conditions — follow these without exception
-- If `semantic_search` returns "No results found" **once**: immediately switch to
-  `read-cypher`. Do NOT call `semantic_search` again with a different query.
-- If both `semantic_search` and `read-cypher` return nothing: answer directly
-  from the pre-fetched context or state what you know. Do NOT loop further.
-- Never call the same tool more than twice in a single turn.
-"""
-
-_SKILL_DOC = """\
-## Skill: Documentation generation
-
-You are generating or improving documentation.
-
-1. Use `summarize` for a plain-English overview of a file, class, or module.
-2. Use `generate_docstring` to produce a Google-style docstring for a function \
-   or method.
-3. Use `semantic_search` or `file_reader` to fetch the source if you need to \
-   inspect the code yourself before writing.
-4. Return only the requested documentation — no surrounding commentary.
-
-### Tool parameter reference
-- `summarize` — parameters: `target` (file path or qualified name), `repo_id`.
-- `generate_docstring` — parameters: `function_id` (qualified name), `repo_id`.
-- `semantic_search` — parameters: `query`, `repo_id`, optional `top_k`, `chunk_type`.
-- `file_reader` — parameters: `file_path`, `repo_id`.
-"""
-
-_SKILL_DIAGRAM = """\
-## Skill: Diagram generation
-
-You are generating a Mermaid diagram that visualises codebase structure.
-
-1. Call `generate_mermaid` with the appropriate `diagram_type`:
-   - `'flowchart'`       → file-level import / dependency graph
-   - `'classDiagram'`    → class hierarchy and their methods
-   - `'sequenceDiagram'` → function call flows between components
-2. Set `scope` to a file path or module name if the user asked for a specific area.
-3. Set `focus` to a short phrase that captures the user's intent, e.g. `'auth flow'`.
-4. The tool returns a validated, fenced ```mermaid block — include it **verbatim** in your answer.
-5. After inserting the diagram, add a brief (2-4 sentence) explanation of what it shows.
-
-### Tool parameter reference
-- `generate_mermaid` — parameters: `repo_id`, `diagram_type`, optional `scope`, `focus`.
-- `semantic_search`   — use only if you need extra context before choosing diagram_type.
-
-### HARD rules
-- **Do NOT call `validate_mermaid`** — the diagram is already validated inside `generate_mermaid`.
-- **Do NOT call any other tool after receiving the diagram** — just write your answer.
-- Do not invent node/class names that are not in the tool-returned data.
-- Do not mix diagram types (e.g. classDiagram arrows inside a flowchart).
-- Always include at least one sentence of explanation after the diagram.
-"""
+# Loaded once at import time — restart the server to pick up edits.
+_SYSTEM_PROMPT_BASE = _load_prompt("system_base")
+_ROUTER_PROMPT = _load_prompt("router")
 
 _SKILL_MAP: dict[str, str] = {
-    "structural": _SKILL_ARCHITECTURE,
-    "implementation": _SKILL_CODE_SEARCH,
-    "generation": _SKILL_DOC,
-    "diagram": _SKILL_DIAGRAM,
+    "structural":     _load_prompt("skill_architecture"),
+    "implementation": _load_prompt("skill_implementation"),
+    "generation":     _load_prompt("skill_documentation"),
+    "diagram":        _load_prompt("skill_diagram"),
 }
-
-# ---------------------------------------------------------------------------
-# Router prompt
-# ---------------------------------------------------------------------------
-
-_ROUTER_PROMPT = """\
-You are classifying a codebase Q&A query. Reply with ONLY one word from this list:
-
-- "structural"     — architecture, module layout, class hierarchy, call graphs,
-  import relationships, "what does this codebase do", "what calls X", "show all classes",
-  file counts, file type distribution, "how many X", "are there any Y files",
-  repository composition, folder structure
-- "implementation" — how an algorithm works, where a function is defined,
-  specific logic details, "how does X work", "show me Y", "where is Z", "explain X"
-- "generation"     — generate or improve documentation, write a docstring,
-  summarise a file or class
-- "diagram"        — draw, visualise, or render a diagram, graph, chart, flowchart,
-  class diagram, or sequence diagram of the codebase structure or call flows
-- "direct"         — ONLY pure greetings ("hi", "hello", "thanks") or requests to
-  rephrase/shorten/expand the immediately preceding AI answer; never use "direct"
-  for any question about the codebase itself
-
-{context_block}\
-Query: {query}
-"""
 
 # ---------------------------------------------------------------------------
 # State
@@ -373,11 +250,28 @@ def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
     if context:
         system_content += f"\n\nRetrieved context from codebase:\n\n{context}"
 
+    # Guard against infinite tool-call loops: if 5+ tool results already exist in this
+    # turn, force the LLM to stop calling tools and synthesise a final answer.
+    from langchain_core.messages import ToolMessage  # noqa: PLC0415
+
+    tool_call_count = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
+    if tool_call_count >= 5:
+        logger.warning(
+            "agent[reasoning] %d tool calls detected — injecting stop-loop instruction",
+            tool_call_count,
+        )
+        system_content += (
+            "\n\n**IMPORTANT**: You have already called tools multiple times. "
+            "Do NOT call any more tools. Using the tool results already in this conversation, "
+            "write a complete, final answer for the user right now."
+        )
+
     messages: list[BaseMessage] = [SystemMessage(content=system_content), *state["messages"]]
     logger.debug(
-        "agent[reasoning] prompt messages=%d system_len=%d",
+        "agent[reasoning] prompt messages=%d system_len=%d tool_calls_so_far=%d",
         len(messages),
         len(system_content),
+        tool_call_count,
     )
 
     response = llm.invoke(messages)
@@ -390,35 +284,30 @@ def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
         type(response).__name__,
     )
 
-    # Recovery: if the LLM returned empty content with no valid tool calls (e.g. it
-    # attempted an invalid/hallucinated tool call or the args were malformed), but
-    # there are tool results already in history, force a synthesis pass so the user
-    # never receives a blank response.
+    # Recovery: if the LLM returned empty content with no valid tool calls, force a
+    # synthesis pass so the user never receives a blank response.
     if not response_text and not tool_calls:
-        from langchain_core.messages import ToolMessage  # noqa: PLC0415
-
-        has_tool_results = any(isinstance(m, ToolMessage) for m in state["messages"])
+        has_tool_results = tool_call_count > 0
         if has_tool_results:
-            logger.warning(
-                "agent[reasoning] empty response after tool results — forcing synthesis pass"
+            recovery_content = (
+                "Your last action produced no output. "
+                "Using the tool results already in this conversation, "
+                "write a complete answer for the user. "
+                "Do not call any more tools."
             )
-            recovery = llm.invoke(
-                messages
-                + [
-                    HumanMessage(
-                        content=(
-                            "Your last action produced no output. "
-                            "Using the tool results already in this conversation, "
-                            "write a complete answer for the user. "
-                            "Do not call any more tools."
-                        )
-                    )
-                ]
-            )
-            if _msg_text(getattr(recovery, "content", "")):
-                response = recovery
         else:
-            logger.warning("agent[reasoning] LLM returned empty content with no tool calls")
+            recovery_content = (
+                "Your last response was empty. "
+                "Please provide a complete, helpful answer to the user's question "
+                "based on the context provided. Do not call any tools."
+            )
+        logger.warning(
+            "agent[reasoning] empty response — forcing recovery pass (has_tool_results=%s)",
+            has_tool_results,
+        )
+        recovery = llm.invoke(messages + [HumanMessage(content=recovery_content)])
+        if _msg_text(getattr(recovery, "content", "")):
+            response = recovery
 
     return {"messages": [response]}
 
@@ -578,7 +467,8 @@ class CodebaseAgent:
             (m for m in reversed(self._history) if isinstance(m, AIMessage)),
             None,
         )
-        return str(last_ai.content) if last_ai else ""
+        text = _msg_text(last_ai.content) if last_ai else ""
+        return text or "I wasn't able to generate a response. Please try rephrasing your question."
 
     def stream(self, query: str) -> Iterator[str]:
         """Send a message and stream the response token by token.
@@ -699,6 +589,22 @@ class CodebaseAgent:
                     "token": "\n\n_Response timed out. Please try again or rephrase your question._"
                 }
                 accumulated = "(timed out)"
+        except Exception as exc:  # noqa: BLE001
+            from langgraph.errors import GraphRecursionError  # noqa: PLC0415
+
+            if isinstance(exc, GraphRecursionError):
+                logger.warning("CodebaseAgent.astream_with_status recursion limit reached")
+                msg = (
+                    last_answer_text
+                    or "I reached my tool-call limit before finishing. "
+                    "Please try a more specific question."
+                )
+                if not accumulated:
+                    yield {"token": msg}
+                    accumulated = msg
+                # Don't re-raise — treat as a completed (degraded) response.
+            else:
+                raise
 
         if not accumulated and last_answer_text:
             accumulated = last_answer_text
@@ -710,12 +616,12 @@ class CodebaseAgent:
             yield {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
         if not timed_out:
-            if accumulated:
-                self._history.append(AIMessage(content=accumulated))
-            else:
-                if self._history and isinstance(self._history[-1], HumanMessage):
-                    self._history.pop()
+            if not accumulated:
+                fallback = "I wasn't able to generate a response. Please try rephrasing your question."
+                yield {"token": fallback}
+                accumulated = fallback
                 logger.warning("agent[astream_with_status] empty response for query=%r", query)
+            self._history.append(AIMessage(content=accumulated))
 
     async def achat(self, query: str) -> str:
         """Async version of :meth:`chat` — required when MCP tools are active.
@@ -735,7 +641,8 @@ class CodebaseAgent:
             (m for m in reversed(self._history) if isinstance(m, AIMessage)),
             None,
         )
-        return str(last_ai.content) if last_ai else ""
+        text = _msg_text(last_ai.content) if last_ai else ""
+        return text or "I wasn't able to generate a response. Please try rephrasing your question."
 
     async def astream(self, query: str) -> AsyncIterator[str]:
         """Async streaming version of :meth:`stream` — required when MCP tools are active.
@@ -757,55 +664,69 @@ class CodebaseAgent:
         last_answer_text = ""
 
         config = RunnableConfig(recursion_limit=25)
-        async for event in self._graph.astream_events(self._build_input(), config, version="v2"):
-            etype = event["event"]
-            node = event.get("metadata", {}).get("langgraph_node")
-            if node == "router":
-                continue
+        try:
+            async for event in self._graph.astream_events(self._build_input(), config, version="v2"):
+                etype = event["event"]
+                node = event.get("metadata", {}).get("langgraph_node")
+                if node == "router":
+                    continue
 
-            if etype in {"on_chat_model_stream", "on_llm_stream"}:
-                chunk = event["data"].get("chunk")
-                text = _msg_text(getattr(chunk, "content", chunk))
-                if text:
-                    accumulated += text
-                    yield text
-
-            elif etype in {"on_chat_model_end", "on_llm_end"}:
-                output = event["data"].get("output") or event["data"].get("content")
-                if output is not None:
-                    tool_calls = getattr(output, "tool_calls", [])
-                    text = _msg_text(getattr(output, "content", output))
+                if etype in {"on_chat_model_stream", "on_llm_stream"}:
+                    chunk = event["data"].get("chunk")
+                    text = _msg_text(getattr(chunk, "content", chunk))
                     if text:
-                        if tool_calls:
-                            logger.debug(
-                                "agent[reasoning] end event with tool_calls tool_calls=%r",
-                                tool_calls,
-                            )
-                        last_answer_text = text
+                        accumulated += text
+                        yield text
 
+                elif etype in {"on_chat_model_end", "on_llm_end"}:
+                    output = event["data"].get("output") or event["data"].get("content")
+                    if output is not None:
+                        tool_calls = getattr(output, "tool_calls", [])
+                        text = _msg_text(getattr(output, "content", output))
+                        if text:
+                            if tool_calls:
+                                logger.debug(
+                                    "agent[reasoning] end event with tool_calls tool_calls=%r",
+                                    tool_calls,
+                                )
+                            last_answer_text = text
+
+                else:
+                    data = event.get("data", {})
+                    data_keys = list(data.keys()) if isinstance(data, dict) else type(data)
+                    logger.debug(
+                        "agent[reasoning] event ignored event=%s node=%s data_keys=%s",
+                        etype,
+                        node,
+                        data_keys,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            from langgraph.errors import GraphRecursionError  # noqa: PLC0415
+
+            if isinstance(exc, GraphRecursionError):
+                logger.warning("CodebaseAgent.astream recursion limit reached")
+                if not accumulated:
+                    fallback = (
+                        last_answer_text
+                        or "I reached my tool-call limit before finishing. "
+                        "Please try a more specific question."
+                    )
+                    accumulated = fallback
+                    yield fallback
             else:
-                data = event.get("data", {})
-                data_keys = list(data.keys()) if isinstance(data, dict) else type(data)
-                logger.debug(
-                    "agent[reasoning] event ignored event=%s node=%s data_keys=%s",
-                    etype,
-                    node,
-                    data_keys,
-                )
+                raise
 
         # Non-streaming / batch endpoints: emit the captured final answer.
         if not accumulated and last_answer_text:
             accumulated = last_answer_text
             yield accumulated
 
-        if accumulated:
-            self._history.append(AIMessage(content=accumulated))
-        else:
-            # No response captured — remove the dangling human message so history
-            # stays balanced (avoid consecutive HumanMessages confusing the LLM).
-            if self._history and isinstance(self._history[-1], HumanMessage):
-                self._history.pop()
+        if not accumulated:
+            fallback = "I wasn't able to generate a response. Please try rephrasing your question."
+            yield fallback
+            accumulated = fallback
             logger.warning("agent[astream] empty accumulated response for query=%r", query)
+        self._history.append(AIMessage(content=accumulated))
 
     # ------------------------------------------------------------------
     # Compaction helpers
