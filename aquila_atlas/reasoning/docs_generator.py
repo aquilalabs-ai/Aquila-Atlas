@@ -69,7 +69,9 @@ def _search_context(svc: KnowledgeService, repo_id: str, query: str, top_k: int 
         return ""
     parts: list[str] = []
     for r in results:
-        parts.append(f"### {r.file_path}:{r.start_line}-{r.end_line} ({r.chunk_type})\n```\n{r.content}\n```")
+        parts.append(
+            f"### {r.file_path}:{r.start_line}-{r.end_line} ({r.chunk_type})\n```\n{r.content}\n```"
+        )
     return "\n\n".join(parts)
 
 
@@ -155,9 +157,7 @@ def _topological_sort(files: list[str], edges: list[tuple[str, str]]) -> list[st
 # ---------------------------------------------------------------------------
 
 
-def _detect_subsystems(
-    svc: KnowledgeService, repo_id: str
-) -> list[list[str]]:
+def _detect_subsystems(svc: KnowledgeService, repo_id: str) -> list[list[str]]:
     """Group files into subsystems via BFS on the import graph.
 
     Falls back to top-level directory grouping when no IMPORTS edges exist.
@@ -279,11 +279,11 @@ def _generate_architecture(
     prompt = f"""You are an expert software architect. Write a comprehensive architecture overview
 for the repository '{repo_id}' in {lang_name}.
 
-Style: {'Technical (for developers — include file paths, data flows, dependency graph)' if style == 'technical' else 'Functional (for PMs/QA — explain behavior, rules, configuration)'}
+Style: {"Technical (for developers — include file paths, data flows, dependency graph)" if style == "technical" else "Functional (for PMs/QA — explain behavior, rules, configuration)"}
 
 File inventory ({len(files)} files):
-{chr(10).join(f'- {f}' for f in files[:50])}
-{'...' if len(files) > 50 else ''}
+{chr(10).join(f"- {f}" for f in files[:50])}
+{"..." if len(files) > 50 else ""}
 
 Graph analysis:
 {graph_ctx}
@@ -338,10 +338,10 @@ def _generate_per_module(
 
         prompt = f"""You are an expert software engineer. Document the '{module}' module of repository '{repo_id}' in {lang_name}.
 
-Style: {'Technical — include class/function signatures, types, integration points' if style == 'technical' else 'Functional — explain purpose, behavior, configuration options'}
+Style: {"Technical — include class/function signatures, types, integration points" if style == "technical" else "Functional — explain purpose, behavior, configuration options"}
 
 Files in this module ({len(module_files)}):
-{chr(10).join(f'- {f}' for f in module_files)}
+{chr(10).join(f"- {f}" for f in module_files)}
 {dep_context}
 
 Code samples:
@@ -385,11 +385,15 @@ def _generate_per_file(
         for src, tgt in edges:
             if src == file_path and tgt in dependency_summaries:
                 dep_summaries.append(f"- `{tgt}`: {dependency_summaries[tgt]}")
-        dep_section = ("\n**Already-documented dependencies:**\n" + "\n".join(dep_summaries)) if dep_summaries else ""
+        dep_section = (
+            ("\n**Already-documented dependencies:**\n" + "\n".join(dep_summaries))
+            if dep_summaries
+            else ""
+        )
 
         prompt = f"""You are an expert software engineer. Document the file '{file_path}' from repository '{repo_id}' in {lang_name}.
 
-Style: {'Technical — include function/class signatures, parameters, return types, side effects' if style == 'technical' else 'Functional — explain what this file does, its rules, and configuration'}
+Style: {"Technical — include function/class signatures, parameters, return types, side effects" if style == "technical" else "Functional — explain what this file does, its rules, and configuration"}
 
 {graph_ctx}
 {dep_section}
@@ -440,13 +444,13 @@ def _generate_subsystems(
 
         prompt = f"""You are an expert software architect. Document the '{name}' subsystem of repository '{repo_id}' in {lang_name}.
 
-Style: {'Technical — include class/function signatures, integration points, data contracts' if style == 'technical' else 'Functional — explain what this subsystem does, its responsibilities, how to use it'}
+Style: {"Technical — include class/function signatures, integration points, data contracts" if style == "technical" else "Functional — explain what this subsystem does, its responsibilities, how to use it"}
 
 Files in this subsystem ({len(files)}):
-{chr(10).join(f'- {f}' for f in files)}
+{chr(10).join(f"- {f}" for f in files)}
 
 Most-imported (public interface) files:
-{chr(10).join(f'- {f} (imported by {in_counts.get(f, 0)} files)' for f in public_files) if public_files else '(none detected)'}
+{chr(10).join(f"- {f} (imported by {in_counts.get(f, 0)} files)" for f in public_files) if public_files else "(none detected)"}
 
 Code samples:
 {ctx}
@@ -471,7 +475,9 @@ def _generate_flows(
 ) -> dict[str, str]:
     entry_points = svc.get_entry_points(repo_id)
     if not entry_points:
-        return {"flows/no_entry_points.md": "# No entry points found\n\nNo public functions without callers were detected in this repository."}
+        return {
+            "flows/no_entry_points.md": "# No entry points found\n\nNo public functions without callers were detected in this repository."
+        }
 
     total = len(entry_points)
     result: dict[str, str] = {}
@@ -492,14 +498,16 @@ def _generate_flows(
         tree_lines: list[str] = [f"- `{name}` (depth 0) — entry point in `{file_path}`"]
         for step in call_chain:
             indent = "  " * int(step.get("depth", 1))
-            tree_lines.append(f"{indent}- `{step['name']}` (depth {step['depth']}) in `{step['file_path']}`")
+            tree_lines.append(
+                f"{indent}- `{step['name']}` (depth {step['depth']}) in `{step['file_path']}`"
+            )
         call_tree = "\n".join(tree_lines)
 
         ctx = _search_context(svc, repo_id, f"function {name} {file_path}", top_k=10)
 
         prompt = f"""You are an expert software engineer. Document the execution flow starting from '{name}' in repository '{repo_id}' in {lang_name}.
 
-Style: {'Technical — include parameters, return types, error handling, side effects at each step' if style == 'technical' else 'Functional — explain what happens at each step in plain language, what inputs/outputs are expected'}
+Style: {"Technical — include parameters, return types, error handling, side effects at each step" if style == "technical" else "Functional — explain what happens at each step in plain language, what inputs/outputs are expected"}
 
 Entry point: `{name}` in `{file_path}`
 
@@ -560,5 +568,7 @@ def generate_docs(
     if generator is None:
         raise ValueError(f"Unknown scope: {scope!r}. Valid: {list(dispatch)}")
 
-    logger.info("docs_generator: repo=%s scope=%s style=%s language=%s", repo_id, scope, style, language)
+    logger.info(
+        "docs_generator: repo=%s scope=%s style=%s language=%s", repo_id, scope, style, language
+    )
     return generator(svc, repo_id, style, language, llm, progress_callback)

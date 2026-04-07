@@ -82,7 +82,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.doc_store = create_doc_store(get_settings().postgres_url)
         _log.info("Doc store connected to PostgreSQL")
     except Exception:
-        _log.warning("PostgreSQL unavailable — docs will not persist across restarts", exc_info=True)
+        _log.warning(
+            "PostgreSQL unavailable — docs will not persist across restarts", exc_info=True
+        )
         app.state.doc_store = None
 
     # Load MCP tools once at startup so every chat session gets them

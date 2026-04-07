@@ -290,7 +290,9 @@ async def download_doc_zip(
                     files = row["files"]
 
     if not files:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documentation not found or not ready")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Documentation not found or not ready"
+        )
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

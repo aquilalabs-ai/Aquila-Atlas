@@ -148,7 +148,9 @@ def delete_repo(
     svc: Svc,
     _auth: Auth,
     delete_sessions: bool = Query(False, description="Also delete all chat sessions for this repo"),
-    delete_docs: bool = Query(False, description="Also delete all saved documentation for this repo"),
+    delete_docs: bool = Query(
+        False, description="Also delete all saved documentation for this repo"
+    ),
 ) -> DeleteRepoResponse:
     if repo_id not in svc.list_repo_ids():
         raise HTTPException(

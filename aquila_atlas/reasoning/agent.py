@@ -112,10 +112,10 @@ _SYSTEM_PROMPT_BASE = _load_prompt("system_base")
 _ROUTER_PROMPT = _load_prompt("router")
 
 _SKILL_MAP: dict[str, str] = {
-    "structural":     _load_prompt("skill_architecture"),
+    "structural": _load_prompt("skill_architecture"),
     "implementation": _load_prompt("skill_implementation"),
-    "generation":     _load_prompt("skill_documentation"),
-    "diagram":        _load_prompt("skill_diagram"),
+    "generation": _load_prompt("skill_documentation"),
+    "diagram": _load_prompt("skill_diagram"),
 }
 
 # ---------------------------------------------------------------------------
@@ -617,7 +617,9 @@ class CodebaseAgent:
 
         if not timed_out:
             if not accumulated:
-                fallback = "I wasn't able to generate a response. Please try rephrasing your question."
+                fallback = (
+                    "I wasn't able to generate a response. Please try rephrasing your question."
+                )
                 yield {"token": fallback}
                 accumulated = fallback
                 logger.warning("agent[astream_with_status] empty response for query=%r", query)
@@ -665,7 +667,9 @@ class CodebaseAgent:
 
         config = RunnableConfig(recursion_limit=25)
         try:
-            async for event in self._graph.astream_events(self._build_input(), config, version="v2"):
+            async for event in self._graph.astream_events(
+                self._build_input(), config, version="v2"
+            ):
                 etype = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node")
                 if node == "router":

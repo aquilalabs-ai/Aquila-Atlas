@@ -617,8 +617,12 @@ class DocGenRequest(BaseModel):
         ),
     )
     style: str = Field("technical", description='"technical" (developer) or "functional" (PM/QA)')
-    language: str = Field("en", description="ISO-639-1 language code (en, fr, es, de, zh, ja, pt, ar)")
-    targets: list[str] | None = Field(None, description="Optional list of specific files/modules to document")
+    language: str = Field(
+        "en", description="ISO-639-1 language code (en, fr, es, de, zh, ja, pt, ar)"
+    )
+    targets: list[str] | None = Field(
+        None, description="Optional list of specific files/modules to document"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -661,7 +665,9 @@ class DocJobStatus(BaseModel):
     total: int = Field(0)
     current_target: str | None = Field(None)
     error: str | None = Field(None)
-    files: list[str] = Field(default_factory=list, description="Generated filenames (populated on done)")
+    files: list[str] = Field(
+        default_factory=list, description="Generated filenames (populated on done)"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -738,9 +744,7 @@ class DocListResponse(BaseModel):
     total: int
 
     model_config = {
-        "json_schema_extra": {
-            "examples": [{"repo_id": "my-service", "docs": [], "total": 0}]
-        }
+        "json_schema_extra": {"examples": [{"repo_id": "my-service", "docs": [], "total": 0}]}
     }
 
 
@@ -752,7 +756,11 @@ class DocDeleteResponse(BaseModel):
     model_config = {
         "json_schema_extra": {
             "examples": [
-                {"success": True, "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "message": "Deleted"}
+                {
+                    "success": True,
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "message": "Deleted",
+                }
             ]
         }
     }
