@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 
 from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
@@ -158,8 +168,8 @@ def delete_repo(
             sessions_deleted = store.delete_all_repo_sessions(repo_id)
 
     if delete_docs:
-        from aquila_atlas.api.store import DocStore  # noqa: PLC0415
         from aquila_atlas.api.routers.docs import _doc_jobs  # noqa: PLC0415
+        from aquila_atlas.api.store import DocStore  # noqa: PLC0415
 
         # Purge in-memory doc jobs for this repo
         to_remove = [jid for jid, rec in _doc_jobs.items() if rec.repo_id == repo_id]
