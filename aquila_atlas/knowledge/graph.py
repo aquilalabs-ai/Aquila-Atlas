@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -15,43 +14,20 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-_BUILTINS: frozenset[str] = frozenset(
-    {
-        "print",
-        "len",
-        "range",
-        "str",
-        "int",
-        "list",
-        "dict",
-        "tuple",
-        "set",
-        "bool",
-        "type",
-        "super",
-        "isinstance",
-        "issubclass",
-        "hasattr",
-        "getattr",
-        "setattr",
-        "delattr",
-        "vars",
-        "dir",
-    }
-)
-
 _CONSTRAINT_STATEMENTS: tuple[str, ...] = (
     "CREATE CONSTRAINT repo_id IF NOT EXISTS FOR (r:Repository) REQUIRE r.id IS UNIQUE",
     "CREATE CONSTRAINT file_id IF NOT EXISTS FOR (f:File) REQUIRE f.id IS UNIQUE",
     "CREATE CONSTRAINT class_id IF NOT EXISTS FOR (c:Class) REQUIRE c.id IS UNIQUE",
     "CREATE CONSTRAINT function_id IF NOT EXISTS FOR (fn:Function) REQUIRE fn.id IS UNIQUE",
     "CREATE CONSTRAINT method_id IF NOT EXISTS FOR (m:Method) REQUIRE m.id IS UNIQUE",
+    "CREATE CONSTRAINT interface_id IF NOT EXISTS FOR (i:Interface) REQUIRE i.id IS UNIQUE",
 )
 
 _INDEX_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX file_repo_id IF NOT EXISTS FOR (f:File) ON (f.repo_id)",
     "CREATE INDEX function_repo_id IF NOT EXISTS FOR (fn:Function) ON (fn.repo_id)",
     "CREATE INDEX method_repo_id IF NOT EXISTS FOR (m:Method) ON (m.repo_id)",
+    "CREATE INDEX interface_repo_id IF NOT EXISTS FOR (i:Interface) ON (i.repo_id)",
 )
 
 
@@ -87,31 +63,25 @@ def _entity_props(entity: CodeEntity, repo_id: str, node_id: str) -> dict[str, o
 def extract_calls(entities: list[CodeEntity]) -> list[tuple[str, str, str]]:
     """Return ``(caller_qualified_name, caller_file_path, callee_name)`` triples.
 
-    Performs best-effort static analysis by walking ``ast.Call`` nodes inside
-    each function/method source.  Only the simple name of the callee is
-    extracted — resolution against known entities happens in :meth:`GraphStore.ingest`.
+    Delegates to each file's language plugin.  Supports all registered languages
+    automatically — no language-specific code lives here.
     """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from aquila_atlas.ingestion.language import get_plugin  # noqa: PLC0415
+
+    # Group callables by extension so each plugin is called once.
+    by_suffix: dict[str, list[CodeEntity]] = {}
+    for e in entities:
+        if e.type in ("function", "method"):
+            suffix = _Path(e.file_path).suffix.lower()
+            by_suffix.setdefault(suffix, []).append(e)
+
     results: list[tuple[str, str, str]] = []
-    for entity in entities:
-        if entity.type not in ("function", "method"):
-            continue
-        try:
-            tree = ast.parse(entity.source)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if isinstance(func, ast.Name):
-                callee = func.id
-            elif isinstance(func, ast.Attribute):
-                callee = func.attr
-            else:
-                continue
-            if callee in _BUILTINS:
-                continue
-            results.append((entity.qualified_name, entity.file_path, callee))
+    for suffix, ents in by_suffix.items():
+        plugin = get_plugin(suffix)
+        if plugin is not None:
+            results.extend(plugin.extract_calls(ents))
     return results
 
 
@@ -180,6 +150,7 @@ class GraphStore:
         classes = [e for e in entities if e.type == "class"]
         functions = [e for e in entities if e.type == "function"]
         methods = [e for e in entities if e.type == "method"]
+        interfaces = [e for e in entities if e.type == "interface"]
 
         with self._driver.session() as session:
             self._ingest_repo_node(session, repo_id, label, commit_sha)
@@ -187,6 +158,7 @@ class GraphStore:
             self._ingest_class_nodes(session, repo_id, classes)
             self._ingest_function_nodes(session, repo_id, functions)
             self._ingest_method_nodes(session, repo_id, methods)
+            self._ingest_interface_nodes(session, repo_id, interfaces)
             self._ingest_import_edges(session, repo_id, files)
             self._ingest_call_edges(session, repo_id, functions + methods)
 
@@ -280,6 +252,25 @@ class GraphStore:
             ],
         )
 
+    def _ingest_interface_nodes(
+        self,
+        session: Any,
+        repo_id: str,
+        interfaces: list[CodeEntity],
+    ) -> None:
+        if not interfaces:
+            return
+        session.execute_write(
+            _write_interfaces,
+            rows=[
+                {
+                    **_entity_props(e, repo_id, _entity_id(repo_id, e.file_path, e.qualified_name)),
+                    "file_id": _file_id(repo_id, e.file_path),
+                }
+                for e in interfaces
+            ],
+        )
+
     def _ingest_import_edges(
         self,
         session: Any,
@@ -292,10 +283,20 @@ class GraphStore:
         import_rows: list[dict[str, object]] = []
         unresolved_rows: list[dict[str, object]] = []
 
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from aquila_atlas.ingestion.language import get_plugin  # noqa: PLC0415
+
         for file_entity in files:
+            suffix = _Path(file_entity.file_path).suffix.lower()
+            plugin = get_plugin(suffix)
             unresolved: list[str] = []
             for imp in file_entity.imports:
-                target_id = _resolve_import(imp, known_files)
+                target_id = (
+                    plugin.resolve_import(imp, file_entity.file_path, known_files)
+                    if plugin
+                    else None
+                )
                 if target_id is not None:
                     import_rows.append(
                         {
@@ -711,6 +712,23 @@ def _write_methods(
     )
 
 
+def _write_interfaces(
+    tx: neo4j.ManagedTransaction,
+    rows: list[dict[str, object]],
+) -> None:
+    tx.run(
+        """
+        UNWIND $rows AS row
+        MERGE (i:Interface {id: row.id})
+        SET i += row
+        WITH i, row
+        MATCH (f:File {id: row.file_id})
+        MERGE (f)-[:DEFINES]->(i)
+        """,
+        rows=rows,
+    )
+
+
 def _write_import_edges(
     tx: neo4j.ManagedTransaction,
     rows: list[dict[str, object]],
@@ -752,39 +770,6 @@ def _write_call_edges(
         MERGE (caller)-[:CALLS]->(callee)
         """,
         rows=rows,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Import resolution helper
-# ---------------------------------------------------------------------------
-
-
-def _resolve_import(import_str: str, known_files: dict[str, str]) -> str | None:
-    """Try to map a dotted import string to a known file ID.
-
-    Works regardless of whether the repo was ingested from the package root
-    (paths like ``aquila_atlas/ingestion/parser.py``) or from inside the package
-    (paths like ``ingestion/parser.py`` when the loader root was the package dir).
-
-    For each candidate shape (module.py and package/__init__.py) we check:
-    - exact match
-    - candidate ends with stored path  (stored path is a suffix — repo rooted deeper)
-    - stored path ends with candidate  (candidate is a suffix — import has package prefix)
-    """
-
-    def _match(candidate: str) -> str | None:
-        for file_path, file_id in known_files.items():
-            if (
-                file_path == candidate
-                or candidate.endswith("/" + file_path)
-                or file_path.endswith("/" + candidate)
-            ):
-                return file_id
-        return None
-
-    return _match(import_str.replace(".", "/") + ".py") or _match(
-        import_str.replace(".", "/") + "/__init__.py"
     )
 
 

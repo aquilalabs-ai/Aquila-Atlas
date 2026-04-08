@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import pathlib
 from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -26,6 +27,68 @@ if TYPE_CHECKING:
 logger = logging.getLogger("aquila.docs_generator")
 
 DocScope = Literal["architecture", "per_module", "per_file", "subsystem", "flows"]
+
+# ---------------------------------------------------------------------------
+# Prompt loading
+# ---------------------------------------------------------------------------
+
+_PROMPTS_DIR = pathlib.Path(__file__).parent / "prompts"
+
+
+def _load_docs_prompt(name: str) -> str:
+    """Load a docs prompt template from prompts/<name>.md.
+
+    Falls back gracefully to an empty string if the file is missing.
+    """
+    path = _PROMPTS_DIR / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logger.warning("docs prompt file not found: %s", path)
+        return ""
+
+
+def _apply_template(template: str, **kwargs: str) -> str:
+    """Replace {key} placeholders in *template* without using str.format().
+
+    This avoids ValueError when code samples contain literal braces.
+    """
+    for key, value in kwargs.items():
+        template = template.replace(f"{{{key}}}", value)
+    return template
+
+
+# Style descriptions per scope — edit these to change the tone/detail level
+# that gets injected into each prompt's {style_description} slot.
+_STYLE_DESC: dict[str, dict[str, str]] = {
+    "architecture": {
+        "technical": "Technical (for developers — include file paths, data flows, dependency graph)",
+        "functional": "Functional (for PMs/QA — explain behavior, rules, configuration)",
+    },
+    "per_module": {
+        "technical": "Technical — include class/function signatures, types, integration points",
+        "functional": "Functional — explain purpose, behavior, configuration options",
+    },
+    "per_file": {
+        "technical": "Technical — include function/class signatures, parameters, return types, side effects",
+        "functional": "Functional — explain what this file does, its rules, and configuration",
+    },
+    "subsystems": {
+        "technical": "Technical — include class/function signatures, integration points, data contracts",
+        "functional": "Functional — explain what this subsystem does, its responsibilities, how to use it",
+    },
+    "flows": {
+        "technical": "Technical — include parameters, return types, error handling, side effects at each step",
+        "functional": "Functional — explain what happens at each step in plain language, what inputs/outputs are expected",
+    },
+}
+
+# Loaded once at import time — restart the server to pick up edits.
+_PROMPT_ARCHITECTURE = _load_docs_prompt("docs_architecture")
+_PROMPT_PER_MODULE = _load_docs_prompt("docs_per_module")
+_PROMPT_PER_FILE = _load_docs_prompt("docs_per_file")
+_PROMPT_SUBSYSTEMS = _load_docs_prompt("docs_subsystems")
+_PROMPT_FLOWS = _load_docs_prompt("docs_flows")
 
 _LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
@@ -276,23 +339,19 @@ def _generate_architecture(
     graph_ctx = _build_architecture_graph_context(svc, repo_id)
     files = _list_files(svc, repo_id)
 
-    prompt = f"""You are an expert software architect. Write a comprehensive architecture overview
-for the repository '{repo_id}' in {lang_name}.
-
-Style: {"Technical (for developers — include file paths, data flows, dependency graph)" if style == "technical" else "Functional (for PMs/QA — explain behavior, rules, configuration)"}
-
-File inventory ({len(files)} files):
-{chr(10).join(f"- {f}" for f in files[:50])}
-{"..." if len(files) > 50 else ""}
-
-Graph analysis:
-{graph_ctx}
-
-Code samples:
-{ctx}
-
-Write a well-structured Markdown document with sections: Overview, Architecture, Key Components, Data Flow, Entry Points, Dependencies.
-"""
+    file_list = "\n".join(f"- {f}" for f in files[:50])
+    if len(files) > 50:
+        file_list += "\n..."
+    prompt = _apply_template(
+        _PROMPT_ARCHITECTURE,
+        repo_id=repo_id,
+        lang_name=lang_name,
+        style_description=_STYLE_DESC["architecture"].get(style, style),
+        file_count=str(len(files)),
+        file_list=file_list,
+        graph_ctx=graph_ctx,
+        ctx=ctx,
+    )
     result = llm.invoke(prompt)
     content: str = result.content if hasattr(result, "content") else str(result)
     progress_callback and progress_callback(1, 1, None)
@@ -336,19 +395,17 @@ def _generate_per_module(
             if tgt_mod == module and src_mod in dependency_summaries:
                 dep_context += f"\n**Dependency `{src_mod}`**: {dependency_summaries[src_mod]}"
 
-        prompt = f"""You are an expert software engineer. Document the '{module}' module of repository '{repo_id}' in {lang_name}.
-
-Style: {"Technical — include class/function signatures, types, integration points" if style == "technical" else "Functional — explain purpose, behavior, configuration options"}
-
-Files in this module ({len(module_files)}):
-{chr(10).join(f"- {f}" for f in module_files)}
-{dep_context}
-
-Code samples:
-{ctx}
-
-Write a Markdown document covering: Purpose, Public API, Key Classes/Functions, Dependencies, Usage examples.
-"""
+        prompt = _apply_template(
+            _PROMPT_PER_MODULE,
+            module=module,
+            repo_id=repo_id,
+            lang_name=lang_name,
+            style_description=_STYLE_DESC["per_module"].get(style, style),
+            file_count=str(len(module_files)),
+            module_files="\n".join(f"- {f}" for f in module_files),
+            dep_context=dep_context,
+            ctx=ctx,
+        )
         out = llm.invoke(prompt)
         content: str = out.content if hasattr(out, "content") else str(out)
         result[f"{module}.md"] = content
@@ -391,23 +448,22 @@ def _generate_per_file(
             else ""
         )
 
-        prompt = f"""You are an expert software engineer. Document the file '{file_path}' from repository '{repo_id}' in {lang_name}.
-
-Style: {"Technical — include function/class signatures, parameters, return types, side effects" if style == "technical" else "Functional — explain what this file does, its rules, and configuration"}
-
-{graph_ctx}
-{dep_section}
-
-Code:
-{ctx}
-
-Write a focused Markdown document: Purpose, Exports/Public API, Key implementation details.
-"""
+        prompt = _apply_template(
+            _PROMPT_PER_FILE,
+            file_path=file_path,
+            repo_id=repo_id,
+            lang_name=lang_name,
+            style_description=_STYLE_DESC["per_file"].get(style, style),
+            graph_ctx=graph_ctx,
+            dep_section=dep_section,
+            ctx=ctx,
+        )
         out = llm.invoke(prompt)
         content: str = out.content if hasattr(out, "content") else str(out)
         doc_path = file_path.replace("\\", "/")
-        if doc_path.endswith(".py"):
-            doc_path = doc_path[:-3] + ".md"
+        stem, ext = doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+        if ext and ext not in ("md", "txt", "rst"):
+            doc_path = stem + ".md"
         result[doc_path] = content
         dependency_summaries[file_path] = _extract_summary(content)
 
@@ -442,21 +498,22 @@ def _generate_subsystems(
 
         ctx = _search_context(svc, repo_id, f"subsystem {name} components interface", top_k=15)
 
-        prompt = f"""You are an expert software architect. Document the '{name}' subsystem of repository '{repo_id}' in {lang_name}.
-
-Style: {"Technical — include class/function signatures, integration points, data contracts" if style == "technical" else "Functional — explain what this subsystem does, its responsibilities, how to use it"}
-
-Files in this subsystem ({len(files)}):
-{chr(10).join(f"- {f}" for f in files)}
-
-Most-imported (public interface) files:
-{chr(10).join(f"- {f} (imported by {in_counts.get(f, 0)} files)" for f in public_files) if public_files else "(none detected)"}
-
-Code samples:
-{ctx}
-
-Write a Markdown document: Purpose, Public Interface, Internal Structure, Dependencies, Usage.
-"""
+        public_files_text = (
+            "\n".join(f"- {f} (imported by {in_counts.get(f, 0)} files)" for f in public_files)
+            if public_files
+            else "(none detected)"
+        )
+        prompt = _apply_template(
+            _PROMPT_SUBSYSTEMS,
+            name=name,
+            repo_id=repo_id,
+            lang_name=lang_name,
+            style_description=_STYLE_DESC["subsystems"].get(style, style),
+            file_count=str(len(files)),
+            files="\n".join(f"- {f}" for f in files),
+            public_files=public_files_text,
+            ctx=ctx,
+        )
         out = llm.invoke(prompt)
         content: str = out.content if hasattr(out, "content") else str(out)
         result[f"subsystems/{name.replace(chr(92), '/')}.md"] = content
@@ -505,20 +562,17 @@ def _generate_flows(
 
         ctx = _search_context(svc, repo_id, f"function {name} {file_path}", top_k=10)
 
-        prompt = f"""You are an expert software engineer. Document the execution flow starting from '{name}' in repository '{repo_id}' in {lang_name}.
-
-Style: {"Technical — include parameters, return types, error handling, side effects at each step" if style == "technical" else "Functional — explain what happens at each step in plain language, what inputs/outputs are expected"}
-
-Entry point: `{name}` in `{file_path}`
-
-Call chain ({len(call_chain)} steps):
-{call_tree}
-
-Code context:
-{ctx}
-
-Write a Markdown document tracing the full execution flow: Entry Point, Call Sequence, Data Transformations, Error Paths, Outputs.
-"""
+        prompt = _apply_template(
+            _PROMPT_FLOWS,
+            name=name,
+            file_path=file_path,
+            repo_id=repo_id,
+            lang_name=lang_name,
+            style_description=_STYLE_DESC["flows"].get(style, style),
+            call_count=str(len(call_chain)),
+            call_tree=call_tree,
+            ctx=ctx,
+        )
         out = llm.invoke(prompt)
         content: str = out.content if hasattr(out, "content") else str(out)
         doc_dir = file_path.replace("\\", "/").removesuffix(".py")

@@ -16,7 +16,7 @@ class SourceMetadata:
     languages: dict[str, int] = field(default_factory=dict)  # language -> byte count
 
 
-EntityType = Literal["file", "class", "function", "method"]
+EntityType = Literal["file", "class", "function", "method", "interface"]
 Visibility = Literal["public", "private", "mangled"]
 
 

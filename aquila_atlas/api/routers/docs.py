@@ -60,6 +60,7 @@ class DocJobRecord:
     total: int = 0
     current_target: str | None = None
     error: str | None = None
+    cancelled: bool = False
 
 
 _doc_jobs: dict[str, DocJobRecord] = {}
@@ -82,10 +83,16 @@ DocStoreOrNone = Annotated[object, Depends(_get_doc_store)]
 # ---------------------------------------------------------------------------
 
 
+class _JobCancelled(Exception):
+    """Raised inside the worker thread when the job is cancelled."""
+
+
 def _sync_generate(record: DocJobRecord, svc: object) -> dict[str, str]:
     from aquila_atlas.reasoning.docs_generator import generate_docs  # noqa: PLC0415
 
     def progress(completed: int, total: int, current_target: str | None) -> None:
+        if record.cancelled:
+            raise _JobCancelled
         record.completed = completed
         record.total = total
         record.current_target = current_target
@@ -123,6 +130,10 @@ async def _run_doc_job(job_id: str, svc: object, doc_store: object) -> None:
                     language=record.language,
                     files=record.files,
                 )
+    except _JobCancelled:
+        logger.info("Doc job %s was cancelled", job_id)
+        record.status = "failed"
+        record.error = "Cancelled"
     except Exception as exc:
         logger.exception("Doc job %s failed", job_id)
         record.status = "failed"
@@ -306,6 +317,40 @@ async def download_doc_zip(
         buf,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/docs/jobs/{job_id}/cancel",
+    response_model=DocJobStatus,
+    summary="Cancel a running documentation job",
+)
+async def cancel_doc_job(
+    repo_id: str,
+    job_id: str,
+    _auth: Auth,
+) -> DocJobStatus:
+    record = _doc_jobs.get(job_id)
+    if record is None or record.repo_id != repo_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if record.status not in ("queued", "running"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job is already '{record.status}', cannot cancel",
+        )
+    record.cancelled = True
+    return DocJobStatus(
+        job_id=record.job_id,
+        repo_id=record.repo_id,
+        scope=record.scope,
+        style=record.style,
+        language=record.language,
+        status=record.status,
+        completed=record.completed,
+        total=record.total,
+        current_target=record.current_target,
+        error=record.error,
+        files=[],
     )
 
 

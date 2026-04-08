@@ -468,7 +468,10 @@ class CodebaseAgent:
             None,
         )
         text = _msg_text(last_ai.content) if last_ai else ""
-        return text or "I wasn't able to generate a response. Please try rephrasing your question."
+        if not text:
+            logger.warning("agent[chat] empty response, retrying with bare LLM")
+            text = self._retry_bare()
+        return text
 
     def stream(self, query: str) -> Iterator[str]:
         """Send a message and stream the response token by token.
@@ -581,6 +584,20 @@ class CodebaseAgent:
                             text = _msg_text(getattr(output, "content", output))
                             if text:
                                 last_answer_text = text
+
+                    elif etype == "on_chain_end" and node == "reasoning":
+                        # Reliable fallback: LangGraph always emits on_chain_end with the
+                        # node's full output dict, even when on_chat_model_stream events
+                        # don't propagate from sync nodes running in a thread pool.
+                        output = event["data"].get("output", {})
+                        if isinstance(output, dict):
+                            msgs = output.get("messages", [])
+                            for msg in reversed(msgs):
+                                if isinstance(msg, AIMessage):
+                                    text = _msg_text(getattr(msg, "content", ""))
+                                    if text and not getattr(msg, "tool_calls", None):
+                                        last_answer_text = text
+                                    break
         except TimeoutError:
             logger.warning("CodebaseAgent.astream_with_status timed out after %.0fs", timeout)
             timed_out = True
@@ -617,12 +634,13 @@ class CodebaseAgent:
 
         if not timed_out:
             if not accumulated:
-                fallback = (
-                    "I wasn't able to generate a response. Please try rephrasing your question."
+                logger.warning(
+                    "agent[astream_with_status] empty response, retrying with bare LLM query=%r",
+                    query,
                 )
-                yield {"token": fallback}
-                accumulated = fallback
-                logger.warning("agent[astream_with_status] empty response for query=%r", query)
+                accumulated = await self._retry_bare_async()
+                if accumulated:
+                    yield {"token": accumulated}
             self._history.append(AIMessage(content=accumulated))
 
     async def achat(self, query: str) -> str:
@@ -644,7 +662,10 @@ class CodebaseAgent:
             None,
         )
         text = _msg_text(last_ai.content) if last_ai else ""
-        return text or "I wasn't able to generate a response. Please try rephrasing your question."
+        if not text:
+            logger.warning("agent[achat] empty response, retrying with bare LLM")
+            text = await self._retry_bare_async()
+        return text
 
     async def astream(self, query: str) -> AsyncIterator[str]:
         """Async streaming version of :meth:`stream` — required when MCP tools are active.
@@ -695,6 +716,19 @@ class CodebaseAgent:
                                 )
                             last_answer_text = text
 
+                elif etype == "on_chain_end" and node == "reasoning":
+                    # Reliable fallback: capture the node output directly, since
+                    # on_chat_model_stream events may not propagate from sync nodes.
+                    output = event["data"].get("output", {})
+                    if isinstance(output, dict):
+                        msgs = output.get("messages", [])
+                        for msg in reversed(msgs):
+                            if isinstance(msg, AIMessage):
+                                text = _msg_text(getattr(msg, "content", ""))
+                                if text and not getattr(msg, "tool_calls", None):
+                                    last_answer_text = text
+                                break
+
                 else:
                     data = event.get("data", {})
                     data_keys = list(data.keys()) if isinstance(data, dict) else type(data)
@@ -726,11 +760,37 @@ class CodebaseAgent:
             yield accumulated
 
         if not accumulated:
-            fallback = "I wasn't able to generate a response. Please try rephrasing your question."
-            yield fallback
-            accumulated = fallback
-            logger.warning("agent[astream] empty accumulated response for query=%r", query)
+            logger.warning(
+                "agent[astream] empty response, retrying with bare LLM query=%r", query
+            )
+            accumulated = await self._retry_bare_async()
+            if accumulated:
+                yield accumulated
         self._history.append(AIMessage(content=accumulated))
+
+    # ------------------------------------------------------------------
+    # Bare-LLM retry helpers
+    # ------------------------------------------------------------------
+
+    def _retry_bare(self) -> str:
+        """Re-invoke the plain LLM (no tools) when the graph returns an empty response.
+
+        ``self._history`` already contains the current HumanMessage, so the
+        retry gets full context without any extra setup.
+        """
+        logger.info("agent[retry] invoking bare LLM for recovery")
+        result = self._compaction_llm.invoke(
+            [SystemMessage(content=_SYSTEM_PROMPT_BASE), *self._history]
+        )
+        return _msg_text(result.content)
+
+    async def _retry_bare_async(self) -> str:
+        """Async version of :meth:`_retry_bare`."""
+        logger.info("agent[retry] invoking bare LLM for recovery (async)")
+        result = await self._compaction_llm.ainvoke(
+            [SystemMessage(content=_SYSTEM_PROMPT_BASE), *self._history]
+        )
+        return _msg_text(result.content)
 
     # ------------------------------------------------------------------
     # Compaction helpers

@@ -37,7 +37,7 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
 │                     INGESTION LAYER                         │
-│      GitHub API  │  Python AST parser  │  Token chunker     │
+│  GitHub API  │  tree-sitter (15 languages)  │  Token chunker│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,7 +59,7 @@ Structural queries use MCP tools (`get-schema`, `read-cypher`) against Neo4j dir
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0 — Foundation | ✅ Done | Project scaffold, CI, Docker stack |
-| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), Python AST parser, token-aware chunker |
+| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), tree-sitter parser (15 languages), token-aware chunker |
 | Phase 2 — Knowledge Layer | ✅ Done | Neo4j graph + Qdrant hybrid dense+sparse search + KnowledgeService facade |
 | Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, LangChain tools, MCP tools, CLI |
 | Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, React/Vite UI with Monaco viewer |

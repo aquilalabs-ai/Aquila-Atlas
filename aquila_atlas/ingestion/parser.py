@@ -38,8 +38,9 @@ def _extract_imports(tree: ast.Module) -> tuple[str, ...]:
 
     For ``import foo.bar`` we record ``foo.bar``.
     For ``from foo.bar import Baz`` we record ``foo.bar`` (the module, not the
-    symbol), since ``_resolve_import`` maps dotted names to file paths — appending
-    the symbol name would produce an unresolvable path like ``foo/bar/Baz.py``.
+    symbol), since ``_resolve_py_import`` maps dotted names to file paths —
+    appending the symbol name would produce an unresolvable path like
+    ``foo/bar/Baz.py``.
     """
     seen: set[str] = set()
     result: list[str] = []
@@ -63,15 +64,16 @@ def _extract_imports(tree: ast.Module) -> tuple[str, ...]:
 
 
 def parse(file: RawFile) -> list[CodeEntity]:
-    """Dispatch to the appropriate parser based on file extension."""
+    """Dispatch to the appropriate language plugin, falling back to a single
+    file-level entity for unsupported extensions."""
+    from aquila_atlas.ingestion.language import get_plugin  # lazy — avoids circular import
+
     suffix = Path(file.path).suffix.lower()
-    if suffix == ".py":
-        try:
-            source = file.content.decode("utf-8")
-        except UnicodeDecodeError:
-            return []
-        return parse_python(source, file.path)
-    # Non-Python: single file-level entity
+    plugin = get_plugin(suffix)
+    if plugin is not None:
+        return plugin.parse_file(file.content, file.path)
+
+    # Unsupported extension: single file-level entity preserving raw text.
     try:
         text = file.content.decode("utf-8")
     except UnicodeDecodeError:
@@ -205,3 +207,107 @@ def parse_python(source: str, file_path: str) -> list[CodeEntity]:
             )
 
     return entities
+
+
+# ---------------------------------------------------------------------------
+# Python call extraction
+# ---------------------------------------------------------------------------
+
+_PY_BUILTINS: frozenset[str] = frozenset(
+    {
+        "print",
+        "len",
+        "range",
+        "str",
+        "int",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "bool",
+        "type",
+        "super",
+        "isinstance",
+        "issubclass",
+        "hasattr",
+        "getattr",
+        "setattr",
+        "delattr",
+        "vars",
+        "dir",
+    }
+)
+
+
+def _extract_py_calls(entities: list[CodeEntity]) -> list[tuple[str, str, str]]:
+    """Return ``(caller_qn, caller_fp, callee_name)`` triples for Python entities."""
+    results: list[tuple[str, str, str]] = []
+    for entity in entities:
+        if entity.type not in ("function", "method"):
+            continue
+        try:
+            tree = ast.parse(entity.source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name):
+                callee = func.id
+            elif isinstance(func, ast.Attribute):
+                callee = func.attr
+            else:
+                continue
+            if callee in _PY_BUILTINS:
+                continue
+            results.append((entity.qualified_name, entity.file_path, callee))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Python import resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_py_import(
+    import_str: str,
+    _importer_path: str,  # unused — Python uses dotted module paths, not relative paths
+    known_files: dict[str, str],
+) -> str | None:
+    """Map a dotted Python import string to a known in-repo file ID.
+
+    Works regardless of whether the repo was ingested from the package root
+    (paths like ``aquila_atlas/ingestion/parser.py``) or from inside the package
+    (paths like ``ingestion/parser.py`` when the loader root was the package dir).
+    """
+
+    def _match(candidate: str) -> str | None:
+        for file_path, file_id in known_files.items():
+            if (
+                file_path == candidate
+                or candidate.endswith("/" + file_path)
+                or file_path.endswith("/" + candidate)
+            ):
+                return file_id
+        return None
+
+    return _match(import_str.replace(".", "/") + ".py") or _match(
+        import_str.replace(".", "/") + "/__init__.py"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Language plugin registration
+# ---------------------------------------------------------------------------
+
+from aquila_atlas.ingestion.language import LanguagePlugin, register  # noqa: E402
+
+_PYTHON_PLUGIN = LanguagePlugin(
+    name="Python",
+    extensions=frozenset({".py"}),
+    parse_file=lambda content, path: parse_python(content.decode("utf-8", errors="replace"), path),
+    extract_calls=_extract_py_calls,
+    resolve_import=_resolve_py_import,
+)
+register(_PYTHON_PLUGIN)

@@ -38,8 +38,16 @@ EXT_TO_LANG: dict[str, str] = {
     ".php": "PHP",
     ".swift": "Swift",
     ".kt": "Kotlin",
+    ".kts": "Kotlin",
     ".scala": "Scala",
     ".sh": "Shell",
+    ".bash": "Shell",
+    ".lua": "Lua",
+    ".h": "C",
+    ".hpp": "C++",
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".hh": "C++",
     ".html": "HTML",
     ".css": "CSS",
     ".md": "Markdown",
@@ -50,8 +58,70 @@ EXT_TO_LANG: dict[str, str] = {
 }
 
 # Paths / names to ignore during traversal
-_IGNORE_NAMES = {"__pycache__", ".git", ".venv", "node_modules"}
-_IGNORE_SUFFIXES = {".pyc"}
+_IGNORE_NAMES: frozenset[str] = frozenset(
+    {
+        # Dependency directories
+        "node_modules",
+        "vendor",  # Go, PHP, Ruby
+        "bower_components",
+        # Python artifacts
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        # Build / dist output
+        "dist",
+        "build",
+        "out",
+        "target",  # Rust, Java/Maven
+        "bin",
+        "obj",  # .NET
+        ".next",  # Next.js
+        ".nuxt",  # Nuxt.js
+        ".svelte-kit",  # SvelteKit
+        ".output",  # Nitro / Nuxt output
+        # Coverage & reports
+        "coverage",
+        "htmlcov",
+        ".nyc_output",
+        # Tool caches
+        ".cache",
+        ".parcel-cache",
+        ".turbo",
+        ".gradle",
+        # VCS & IDE
+        ".git",
+        ".hg",
+        ".svn",
+        ".idea",
+        ".vscode",
+    }
+)
+
+_IGNORE_SUFFIXES: frozenset[str] = frozenset(
+    {
+        # Compiled / binary
+        ".pyc",
+        ".pyo",
+        ".class",  # Java bytecode
+        ".o",
+        ".a",
+        ".so",
+        ".dylib",
+        ".dll",
+        ".exe",
+        # Minified assets (no value for code analysis)
+        ".min.js",
+        ".min.css",
+        # Source maps
+        ".map",
+        # Lock files
+        ".lock",
+    }
+)
 
 
 def _should_ignore(path: str) -> bool:
@@ -59,8 +129,9 @@ def _should_ignore(path: str) -> bool:
     for part in parts:
         if part in _IGNORE_NAMES:
             return True
-    suffix = Path(path).suffix
-    return suffix in _IGNORE_SUFFIXES
+    # Check full suffix chain for compound extensions like .min.js
+    name = Path(path).name
+    return any(name.endswith(suffix) for suffix in _IGNORE_SUFFIXES)
 
 
 def detect_languages(files: list[RawFile]) -> dict[str, int]:

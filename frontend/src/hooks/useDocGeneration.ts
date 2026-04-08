@@ -167,6 +167,17 @@ export function useDocGeneration(repoId: string) {
     setDisplayOverride(null)
   }
 
+  /** Cancel the active generation job on the server, then reset to idle. */
+  async function cancel(jobId: string) {
+    stopPolling()
+    clearStorage()
+    try {
+      await api.cancelDocJob(repoId, jobId)
+    } catch { /* ignore — job may have already finished */ }
+    setJobState({ phase: 'idle' })
+    setDisplayOverride(null)
+  }
+
   /**
    * Dismiss a saved-doc override and reveal the current job state.
    * The poll (if any) was never interrupted, so progress is intact.
@@ -187,5 +198,5 @@ export function useDocGeneration(repoId: string) {
     })
   }
 
-  return { state, generate, reset, dismissOverride, loadSaved }
+  return { state, generate, reset, cancel, dismissOverride, loadSaved }
 }
