@@ -28,6 +28,19 @@ logger = logging.getLogger("aquila.docs_generator")
 
 DocScope = Literal["architecture", "per_module", "per_file", "subsystem", "flows"]
 
+
+class GenerationCancelled(BaseException):
+    """Raised by the progress callback when the job is cancelled.
+
+    Each scope generator catches this, attaches the partial result accumulated
+    so far, and re-raises so the caller can persist whatever was completed.
+    The ``partial`` attribute holds the files generated before cancellation.
+    """
+
+    def __init__(self, partial: dict[str, str] | None = None) -> None:
+        super().__init__("Generation cancelled")
+        self.partial: dict[str, str] = partial or {}
+
 # ---------------------------------------------------------------------------
 # Prompt loading
 # ---------------------------------------------------------------------------
@@ -118,6 +131,18 @@ def _make_llm() -> Any:
         base_url=s.llm_base_url or None,
         api_key=SecretStr(s.llm_api_key) if s.llm_api_key else SecretStr("ollama"),
         temperature=0.2,
+        # ┌─────────────────────────────────────────────────────────────────┐
+        # │  LLM REQUEST TIMEOUT — edit this value to change the per-call   │
+        # │  timeout for every documentation generation request.            │
+        # │                                                                 │
+        # │  Unit: seconds                                                  │
+        # │  Default: 300 (5 min)                                           │
+        # │  Recommended for large repos / slow models: 600 (10 min)        │
+        # │                                                                 │
+        # │  Each scope makes one LLM call per file/module/subsystem/flow.  │
+        # │  If a single call exceeds this limit the entire job fails.      │
+        # └─────────────────────────────────────────────────────────────────┘
+        timeout=600,
     )
 
 
@@ -138,12 +163,83 @@ def _search_context(svc: KnowledgeService, repo_id: str, query: str, top_k: int 
     return "\n\n".join(parts)
 
 
-def _list_files(svc: KnowledgeService, repo_id: str) -> list[str]:
-    return sorted(svc.list_files(repo_id))
+# ---------------------------------------------------------------------------
+# File filtering
+# ---------------------------------------------------------------------------
+
+_DEFAULT_SKIP_EXTENSIONS: frozenset[str] = frozenset({
+    # Images / media
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tiff",
+    ".mp4", ".mp3", ".wav", ".ogg", ".flac", ".avi", ".mov", ".mkv", ".webm",
+
+    # Documentation markup
+    ".md", ".rst", ".txt",
+
+    # Compiled / binary artefacts
+    ".pyc", ".pyo", ".pyd",
+    ".class", ".jar", ".war", ".ear",
+    ".o", ".obj", ".a", ".lib",
+    ".so", ".dll", ".dylib",
+    ".exe", ".out", ".bin", ".apk", ".app", ".wasm", ".rlib",
+
+    # Data blobs
+    ".csv", ".parquet", ".feather",
+    ".pkl", ".pickle",
+    ".json", ".yaml", ".yml", ".xml",
+    ".db", ".sqlite",
+    ".npy", ".npz",
+    ".log",
+
+    # Archives
+    ".tar", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar",
+
+    # Misc
+    ".lock",
+})
+
+# Exact filenames always skipped regardless of exclude_extensions.
+_ALWAYS_SKIP_NAMES: frozenset[str] = frozenset({
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    ".editorconfig",
+    ".npmrc",
+    ".nvmrc",
+})
 
 
-def _list_modules(svc: KnowledgeService, repo_id: str) -> list[str]:
-    files = _list_files(svc, repo_id)
+def _list_files(
+    svc: KnowledgeService,
+    repo_id: str,
+    exclude_extensions: frozenset[str] | None = None,
+) -> list[str]:
+    """Return ingested files for *repo_id*, filtered by extension.
+
+    *exclude_extensions* — set of lowercase extensions to skip (e.g. ``{".md", ".png"}``).
+    Pass ``None`` to use :data:`_DEFAULT_SKIP_EXTENSIONS`.
+    Pass an empty ``frozenset()`` to skip no files based on extension.
+    :data:`_ALWAYS_SKIP_NAMES` (git/editor config files) are always removed.
+    """
+    skip_exts = _DEFAULT_SKIP_EXTENSIONS if exclude_extensions is None else exclude_extensions
+    all_files = sorted(svc.list_files(repo_id))
+
+    def _should_skip(path: str) -> bool:
+        name = pathlib.Path(path.replace("\\", "/")).name
+        ext = pathlib.Path(name).suffix.lower()
+        return ext in skip_exts or name in _ALWAYS_SKIP_NAMES
+
+    return [f for f in all_files if not _should_skip(f)]
+
+
+def _list_modules(
+    svc: KnowledgeService,
+    repo_id: str,
+    exclude_extensions: frozenset[str] | None = None,
+) -> list[str]:
+    files = _list_files(svc, repo_id, exclude_extensions)
     seen: set[str] = set()
     modules: list[str] = []
     for f in files:
@@ -220,12 +316,16 @@ def _topological_sort(files: list[str], edges: list[tuple[str, str]]) -> list[st
 # ---------------------------------------------------------------------------
 
 
-def _detect_subsystems(svc: KnowledgeService, repo_id: str) -> list[list[str]]:
+def _detect_subsystems(
+    svc: KnowledgeService,
+    repo_id: str,
+    exclude_extensions: frozenset[str] | None = None,
+) -> list[list[str]]:
     """Group files into subsystems via BFS on the import graph.
 
     Falls back to top-level directory grouping when no IMPORTS edges exist.
     """
-    all_files = _list_files(svc, repo_id)
+    all_files = _list_files(svc, repo_id, exclude_extensions)
     edges = svc.get_import_graph(repo_id)
 
     # Build adjacency (undirected for community detection)
@@ -288,7 +388,11 @@ def _name_subsystem(files: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_architecture_graph_context(svc: KnowledgeService, repo_id: str) -> str:
+def _build_architecture_graph_context(
+    svc: KnowledgeService,
+    repo_id: str,
+    exclude_extensions: frozenset[str] | None = None,
+) -> str:
     """Build a summary of the graph structure for the architecture overview."""
     parts: list[str] = []
 
@@ -310,7 +414,7 @@ def _build_architecture_graph_context(svc: KnowledgeService, repo_id: str) -> st
             parts.append(f"- `{ep['name']}` in `{ep['file_path']}`")
 
     # Subsystem summary
-    subsystems = _detect_subsystems(svc, repo_id)
+    subsystems = _detect_subsystems(svc, repo_id, exclude_extensions)
     if subsystems:
         parts.append("\n**Subsystem clusters:**")
         for sub in subsystems[:8]:
@@ -332,12 +436,13 @@ def _generate_architecture(
     language: str,
     llm: Any,
     progress_callback: Callable[[int, int, str | None], None] | None,
+    exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
     progress_callback and progress_callback(0, 1, "architecture")
     lang_name = _LANGUAGE_NAMES.get(language, "English")
     ctx = _search_context(svc, repo_id, "architecture overview modules components", top_k=20)
-    graph_ctx = _build_architecture_graph_context(svc, repo_id)
-    files = _list_files(svc, repo_id)
+    graph_ctx = _build_architecture_graph_context(svc, repo_id, exclude_extensions)
+    files = _list_files(svc, repo_id, exclude_extensions)
 
     file_list = "\n".join(f"- {f}" for f in files[:50])
     if len(files) > 50:
@@ -365,9 +470,10 @@ def _generate_per_module(
     language: str,
     llm: Any,
     progress_callback: Callable[[int, int, str | None], None] | None,
+    exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
-    modules = _list_modules(svc, repo_id)
-    all_files = _list_files(svc, repo_id)
+    modules = _list_modules(svc, repo_id, exclude_extensions)
+    all_files = _list_files(svc, repo_id, exclude_extensions)
     edges = svc.get_import_graph(repo_id)
 
     # Topo-sort at module level
@@ -384,32 +490,40 @@ def _generate_per_module(
     dependency_summaries: dict[str, str] = {}
     lang_name = _LANGUAGE_NAMES.get(language, "English")
 
-    for i, module in enumerate(ordered_modules):
-        progress_callback and progress_callback(i, total, module)
-        module_files = [f for f in all_files if f.replace("\\", "/").split("/")[0] == module]
-        ctx = _search_context(svc, repo_id, f"module {module} classes functions", top_k=15)
+    try:
+        for i, module in enumerate(ordered_modules):
+            progress_callback and progress_callback(i, total, module)
+            module_files = [f for f in all_files if f.replace("\\", "/").split("/")[0] == module]
+            ctx = _search_context(svc, repo_id, f"module {module} classes functions", top_k=15)
 
-        # Inject summaries from already-generated dependencies
-        dep_context = ""
-        for src_mod, tgt_mod in module_edges:
-            if tgt_mod == module and src_mod in dependency_summaries:
-                dep_context += f"\n**Dependency `{src_mod}`**: {dependency_summaries[src_mod]}"
+            # Inject summaries from already-generated dependencies
+            dep_context = ""
+            for src_mod, tgt_mod in module_edges:
+                if tgt_mod == module and src_mod in dependency_summaries:
+                    dep_context += f"\n**Dependency `{src_mod}`**: {dependency_summaries[src_mod]}"
 
-        prompt = _apply_template(
-            _PROMPT_PER_MODULE,
-            module=module,
-            repo_id=repo_id,
-            lang_name=lang_name,
-            style_description=_STYLE_DESC["per_module"].get(style, style),
-            file_count=str(len(module_files)),
-            module_files="\n".join(f"- {f}" for f in module_files),
-            dep_context=dep_context,
-            ctx=ctx,
-        )
-        out = llm.invoke(prompt)
-        content: str = out.content if hasattr(out, "content") else str(out)
-        result[f"{module}.md"] = content
-        dependency_summaries[module] = _extract_summary(content)
+            prompt = _apply_template(
+                _PROMPT_PER_MODULE,
+                module=module,
+                repo_id=repo_id,
+                lang_name=lang_name,
+                style_description=_STYLE_DESC["per_module"].get(style, style),
+                file_count=str(len(module_files)),
+                module_files="\n".join(f"- {f}" for f in module_files),
+                dep_context=dep_context,
+                ctx=ctx,
+            )
+            try:
+                out = llm.invoke(prompt)
+                content: str = out.content if hasattr(out, "content") else str(out)
+            except Exception as exc:
+                logger.warning("docs_generator: skipping module %r — LLM error: %s", module, exc)
+                content = f"# {module}\n\n> ⚠️ Documentation could not be generated for this module: `{exc}`\n"
+            result[f"{module}.md"] = content
+            dependency_summaries[module] = _extract_summary(content)
+    except GenerationCancelled:
+        logger.info("docs_generator: per_module cancelled — returning %d/%d modules", len(result), total)
+        raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
     return result
@@ -422,8 +536,9 @@ def _generate_per_file(
     language: str,
     llm: Any,
     progress_callback: Callable[[int, int, str | None], None] | None,
+    exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
-    files = _list_files(svc, repo_id)
+    files = _list_files(svc, repo_id, exclude_extensions)
     edges = svc.get_import_graph(repo_id)
     ordered = _topological_sort(files, edges)
 
@@ -432,40 +547,48 @@ def _generate_per_file(
     dependency_summaries: dict[str, str] = {}
     lang_name = _LANGUAGE_NAMES.get(language, "English")
 
-    for i, file_path in enumerate(ordered):
-        progress_callback and progress_callback(i, total, file_path)
-        ctx = _search_context(svc, repo_id, file_path, top_k=10)
-        graph_ctx = _graph_context_block(svc, repo_id, file_path)
+    try:
+        for i, file_path in enumerate(ordered):
+            progress_callback and progress_callback(i, total, file_path)
+            ctx = _search_context(svc, repo_id, file_path, top_k=10)
+            graph_ctx = _graph_context_block(svc, repo_id, file_path)
 
-        # Inject summaries from dependencies already documented
-        dep_summaries: list[str] = []
-        for src, tgt in edges:
-            if src == file_path and tgt in dependency_summaries:
-                dep_summaries.append(f"- `{tgt}`: {dependency_summaries[tgt]}")
-        dep_section = (
-            ("\n**Already-documented dependencies:**\n" + "\n".join(dep_summaries))
-            if dep_summaries
-            else ""
-        )
+            # Inject summaries from dependencies already documented
+            dep_summaries: list[str] = []
+            for src, tgt in edges:
+                if src == file_path and tgt in dependency_summaries:
+                    dep_summaries.append(f"- `{tgt}`: {dependency_summaries[tgt]}")
+            dep_section = (
+                ("\n**Already-documented dependencies:**\n" + "\n".join(dep_summaries))
+                if dep_summaries
+                else ""
+            )
 
-        prompt = _apply_template(
-            _PROMPT_PER_FILE,
-            file_path=file_path,
-            repo_id=repo_id,
-            lang_name=lang_name,
-            style_description=_STYLE_DESC["per_file"].get(style, style),
-            graph_ctx=graph_ctx,
-            dep_section=dep_section,
-            ctx=ctx,
-        )
-        out = llm.invoke(prompt)
-        content: str = out.content if hasattr(out, "content") else str(out)
-        doc_path = file_path.replace("\\", "/")
-        stem, ext = doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
-        if ext and ext not in ("md", "txt", "rst"):
-            doc_path = stem + ".md"
-        result[doc_path] = content
-        dependency_summaries[file_path] = _extract_summary(content)
+            prompt = _apply_template(
+                _PROMPT_PER_FILE,
+                file_path=file_path,
+                repo_id=repo_id,
+                lang_name=lang_name,
+                style_description=_STYLE_DESC["per_file"].get(style, style),
+                graph_ctx=graph_ctx,
+                dep_section=dep_section,
+                ctx=ctx,
+            )
+            try:
+                out = llm.invoke(prompt)
+                content: str = out.content if hasattr(out, "content") else str(out)
+            except Exception as exc:
+                logger.warning("docs_generator: skipping file %r — LLM error: %s", file_path, exc)
+                content = f"# {file_path}\n\n> ⚠️ Documentation could not be generated for this file: `{exc}`\n"
+            doc_path = file_path.replace("\\", "/")
+            stem, ext = doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+            if ext and ext not in ("md", "txt", "rst"):
+                doc_path = stem + ".md"
+            result[doc_path] = content
+            dependency_summaries[file_path] = _extract_summary(content)
+    except GenerationCancelled:
+        logger.info("docs_generator: per_file cancelled — returning %d/%d files", len(result), total)
+        raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
     return result
@@ -478,45 +601,50 @@ def _generate_subsystems(
     language: str,
     llm: Any,
     progress_callback: Callable[[int, int, str | None], None] | None,
+    exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
-    subsystems = _detect_subsystems(svc, repo_id)
+    subsystems = _detect_subsystems(svc, repo_id, exclude_extensions)
     total = len(subsystems)
     result: dict[str, str] = {}
     lang_name = _LANGUAGE_NAMES.get(language, "English")
 
-    for i, files in enumerate(subsystems):
-        name = _name_subsystem(files)
-        progress_callback and progress_callback(i, total, name)
+    try:
+        for i, files in enumerate(subsystems):
+            name = _name_subsystem(files)
+            progress_callback and progress_callback(i, total, name)
 
-        # Identify public interface: files with high in-degree
-        all_edges = svc.get_import_graph(repo_id)
-        in_counts: dict[str, int] = {}
-        for _, tgt in all_edges:
-            if tgt in files:
-                in_counts[tgt] = in_counts.get(tgt, 0) + 1
-        public_files = sorted(in_counts, key=lambda f: -in_counts[f])[:5]
+            # Identify public interface: files with high in-degree
+            all_edges = svc.get_import_graph(repo_id)
+            in_counts: dict[str, int] = {}
+            for _, tgt in all_edges:
+                if tgt in files:
+                    in_counts[tgt] = in_counts.get(tgt, 0) + 1
+            public_files = sorted(in_counts, key=lambda f: -in_counts[f])[:5]
 
-        ctx = _search_context(svc, repo_id, f"subsystem {name} components interface", top_k=15)
+            ctx = _search_context(svc, repo_id, f"subsystem {name} components interface", top_k=15)
 
-        public_files_text = (
-            "\n".join(f"- {f} (imported by {in_counts.get(f, 0)} files)" for f in public_files)
-            if public_files
-            else "(none detected)"
-        )
-        prompt = _apply_template(
-            _PROMPT_SUBSYSTEMS,
-            name=name,
-            repo_id=repo_id,
-            lang_name=lang_name,
-            style_description=_STYLE_DESC["subsystems"].get(style, style),
-            file_count=str(len(files)),
-            files="\n".join(f"- {f}" for f in files),
-            public_files=public_files_text,
-            ctx=ctx,
-        )
-        out = llm.invoke(prompt)
-        content: str = out.content if hasattr(out, "content") else str(out)
-        result[f"subsystems/{name.replace(chr(92), '/')}.md"] = content
+            public_files_text = (
+                "\n".join(f"- {f} (imported by {in_counts.get(f, 0)} files)" for f in public_files)
+                if public_files
+                else "(none detected)"
+            )
+            prompt = _apply_template(
+                _PROMPT_SUBSYSTEMS,
+                name=name,
+                repo_id=repo_id,
+                lang_name=lang_name,
+                style_description=_STYLE_DESC["subsystems"].get(style, style),
+                file_count=str(len(files)),
+                files="\n".join(f"- {f}" for f in files),
+                public_files=public_files_text,
+                ctx=ctx,
+            )
+            out = llm.invoke(prompt)
+            content: str = out.content if hasattr(out, "content") else str(out)
+            result[f"subsystems/{name.replace(chr(92), '/')}.md"] = content
+    except GenerationCancelled:
+        logger.info("docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total)
+        raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
     return result
@@ -540,44 +668,48 @@ def _generate_flows(
     result: dict[str, str] = {}
     lang_name = _LANGUAGE_NAMES.get(language, "English")
 
-    for i, ep in enumerate(entry_points):
-        name = ep["name"]
-        file_path = ep["file_path"]
-        progress_callback and progress_callback(i, total, name)
+    try:
+        for i, ep in enumerate(entry_points):
+            name = ep["name"]
+            file_path = ep["file_path"]
+            progress_callback and progress_callback(i, total, name)
 
-        # Build start_id: repo_id:file_path:qualified_name format
-        start_id = f"{repo_id}:{file_path}:{name}"
-        call_chain: list[dict[str, Any]] = []
-        with contextlib.suppress(Exception):
-            call_chain = svc.get_call_chain(repo_id, start_id, max_depth=6)
+            # Build start_id: repo_id:file_path:qualified_name format
+            start_id = f"{repo_id}:{file_path}:{name}"
+            call_chain: list[dict[str, Any]] = []
+            with contextlib.suppress(Exception):
+                call_chain = svc.get_call_chain(repo_id, start_id, max_depth=6)
 
-        # Build call tree text
-        tree_lines: list[str] = [f"- `{name}` (depth 0) — entry point in `{file_path}`"]
-        for step in call_chain:
-            indent = "  " * int(step.get("depth", 1))
-            tree_lines.append(
-                f"{indent}- `{step['name']}` (depth {step['depth']}) in `{step['file_path']}`"
+            # Build call tree text
+            tree_lines: list[str] = [f"- `{name}` (depth 0) — entry point in `{file_path}`"]
+            for step in call_chain:
+                indent = "  " * int(step.get("depth", 1))
+                tree_lines.append(
+                    f"{indent}- `{step['name']}` (depth {step['depth']}) in `{step['file_path']}`"
+                )
+            call_tree = "\n".join(tree_lines)
+
+            ctx = _search_context(svc, repo_id, f"function {name} {file_path}", top_k=10)
+
+            prompt = _apply_template(
+                _PROMPT_FLOWS,
+                name=name,
+                file_path=file_path,
+                repo_id=repo_id,
+                lang_name=lang_name,
+                style_description=_STYLE_DESC["flows"].get(style, style),
+                call_count=str(len(call_chain)),
+                call_tree=call_tree,
+                ctx=ctx,
             )
-        call_tree = "\n".join(tree_lines)
-
-        ctx = _search_context(svc, repo_id, f"function {name} {file_path}", top_k=10)
-
-        prompt = _apply_template(
-            _PROMPT_FLOWS,
-            name=name,
-            file_path=file_path,
-            repo_id=repo_id,
-            lang_name=lang_name,
-            style_description=_STYLE_DESC["flows"].get(style, style),
-            call_count=str(len(call_chain)),
-            call_tree=call_tree,
-            ctx=ctx,
-        )
-        out = llm.invoke(prompt)
-        content: str = out.content if hasattr(out, "content") else str(out)
-        doc_dir = file_path.replace("\\", "/").removesuffix(".py")
-        safe_func = name.replace(".", "_")
-        result[f"flows/{doc_dir}/{safe_func}.md"] = content
+            out = llm.invoke(prompt)
+            content: str = out.content if hasattr(out, "content") else str(out)
+            doc_dir = file_path.replace("\\", "/").removesuffix(".py")
+            safe_func = name.replace(".", "_")
+            result[f"flows/{doc_dir}/{safe_func}.md"] = content
+    except GenerationCancelled:
+        logger.info("docs_generator: flows cancelled — returning %d/%d flows", len(result), total)
+        raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
     return result
@@ -595,6 +727,7 @@ def generate_docs(
     style: str = "technical",
     language: str = "en",
     targets: list[str] | None = None,
+    exclude_extensions: list[str] | None = None,
     progress_callback: Callable[[int, int, str | None], None] | None = None,
 ) -> dict[str, str]:
     """Generate documentation and return a ``{filename: markdown}`` dict.
@@ -606,9 +739,22 @@ def generate_docs(
         style: ``technical`` (developer-focused) or ``functional`` (PM/QA-focused).
         language: ISO-639-1 language code (default ``en``).
         targets: Optional list of specific files/modules to document (scope-dependent).
+        exclude_extensions: File extensions to skip (e.g. ``[".md", ".png"]``).
+            Pass ``None`` to use :data:`_DEFAULT_SKIP_EXTENSIONS`.
+            Pass ``[]`` to disable extension-based filtering entirely.
         progress_callback: Called as ``callback(completed, total, current_target)`` for progress.
     """
     llm = _make_llm()
+
+    # Normalise: lowercase, leading dot required, deduplicate.
+    skip: frozenset[str] | None
+    if exclude_extensions is None:
+        skip = None  # sentinel → _list_files uses _DEFAULT_SKIP_EXTENSIONS
+    else:
+        skip = frozenset(
+            (ext if ext.startswith(".") else f".{ext}").lower()
+            for ext in exclude_extensions
+        )
 
     dispatch = {
         "architecture": _generate_architecture,
@@ -623,6 +769,8 @@ def generate_docs(
         raise ValueError(f"Unknown scope: {scope!r}. Valid: {list(dispatch)}")
 
     logger.info(
-        "docs_generator: repo=%s scope=%s style=%s language=%s", repo_id, scope, style, language
+        "docs_generator: repo=%s scope=%s style=%s language=%s skip_exts=%s",
+        repo_id, scope, style, language,
+        sorted(skip) if skip is not None else "(defaults)",
     )
-    return generator(svc, repo_id, style, language, llm, progress_callback)
+    return generator(svc, repo_id, style, language, llm, progress_callback, skip)

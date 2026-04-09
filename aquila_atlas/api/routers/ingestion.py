@@ -22,6 +22,10 @@ def _record_to_status(record: object) -> JobStatus:
         files=record.files,
         chunks=record.chunks,
         error=record.error,
+        ingest_type=record.ingest_type,
+        changed_files=record.changed_files,
+        old_commit_sha=record.old_commit_sha,
+        new_commit_sha=record.new_commit_sha,
     )
 
 

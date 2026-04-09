@@ -312,11 +312,3 @@ uv run ruff format .          # format
 uv run mypy aquila_atlas/     # type check
 uv run pytest                 # all tests
 ```
-
----
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for the full phase-by-phase plan.
-
-**Up next**: VS Code extension — inline chat, "Explain this function", graph-backed "Find usages".

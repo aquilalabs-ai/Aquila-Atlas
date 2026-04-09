@@ -37,9 +37,10 @@ interface Props {
   repoId:   string
   filePath: string
   line?:    number
+  endLine?: number
 }
 
-export function SourceViewer({ repoId, filePath, line }: Props) {
+export function SourceViewer({ repoId, filePath, line, endLine }: Props) {
   const closeSource = useAppStore((s) => s.closeSource)
   const theme       = useAppStore((s) => s.theme)
   const editorRef   = useRef<Parameters<OnMount>[0] | null>(null)
@@ -49,24 +50,44 @@ export function SourceViewer({ repoId, filePath, line }: Props) {
     queryFn:  () => api.getFileChunks(repoId, filePath),
   })
 
-  // Reconstruct approximated file content from sorted chunks
+  // Reconstruct file content preserving original line numbers.
+  // Each chunk is placed at its start_line so Monaco line N == original line N,
+  // making citation scroll targets accurate.
   const content = data?.chunks
-    ? [...data.chunks]
-        .sort((a, b) => a.start_line - b.start_line)
-        .map((c) => c.content)
-        .join('\n\n')
+    ? (() => {
+        const sorted = [...data.chunks].sort((a, b) => a.start_line - b.start_line)
+        const lines: string[] = []
+        for (const chunk of sorted) {
+          // Pad to reach this chunk's start line (1-indexed → 0-indexed array)
+          while (lines.length < chunk.start_line - 1) lines.push('')
+          for (const l of chunk.content.split('\n')) lines.push(l)
+        }
+        return lines.join('\n')
+      })()
     : ''
 
   const ext      = filePath.split('.').pop()?.toLowerCase() ?? ''
   const language = EXT_LANG[ext] ?? 'plaintext'
 
-  const handleMount: OnMount = (editor) => {
+  const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor
     if (line) {
-      setTimeout(() => {
+      const disposable = editor.onDidLayoutChange(() => {
+        disposable.dispose()
         editor.revealLineInCenter(line)
         editor.setPosition({ lineNumber: line, column: 1 })
-      }, 100)
+
+        // Highlight the cited range if we have one, otherwise just the single line
+        const rangeEnd = endLine ?? line
+        editor.createDecorationsCollection([{
+          range: new monaco.Range(line, 1, rangeEnd, Number.MAX_SAFE_INTEGER),
+          options: {
+            isWholeLine: true,
+            className: 'monaco-cited-range',
+            overviewRuler: { color: 'rgba(56, 139, 253, 0.6)', position: monaco.editor.OverviewRulerLane.Full },
+          },
+        }])
+      })
     }
   }
 
@@ -80,7 +101,11 @@ export function SourceViewer({ repoId, filePath, line }: Props) {
           title={filePath}
         >
           {filePath}
-          {line && <span className="text-accent-fg">:{line}</span>}
+          {line && (
+            <span className="text-accent-fg">
+              :{line}{endLine && endLine !== line ? `–${endLine}` : ''}
+            </span>
+          )}
         </span>
         <button
           onClick={closeSource}

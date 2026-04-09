@@ -469,6 +469,44 @@ class GraphStore:
 
         return counts
 
+    def get_repo_commit_sha(self, repo_id: str) -> str | None:
+        """Return the commit SHA stored on the Repository node, or None."""
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (r:Repository {id: $id}) RETURN r.commit_sha AS sha",
+                id=repo_id,
+            )
+            record = result.single()
+            if record is None:
+                return None
+            val = record["sha"]
+            return str(val) if val else None
+
+    def delete_files(self, repo_id: str, file_paths: list[str]) -> int:
+        """Delete File nodes (and all their child nodes/edges) for the given paths.
+
+        Cascades via DETACH DELETE so all DEFINES, HAS_METHOD, CALLS, IMPORTS
+        edges originating from or pointing to these file nodes are removed.
+        Returns the total number of nodes deleted.
+        """
+        if not file_paths:
+            return 0
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (f:File {repo_id: $repo_id})
+                WHERE f.file_path IN $file_paths
+                WITH f
+                OPTIONAL MATCH (f)-[:DEFINES]->(child)
+                DETACH DELETE f, child
+                RETURN count(f) AS deleted
+                """,
+                repo_id=repo_id,
+                file_paths=file_paths,
+            )
+            record = result.single()
+            return int(record["deleted"]) if record else 0
+
     def delete_repo(self, repo_id: str) -> int:
         """Delete all nodes (and their relationships) for *repo_id*.
 

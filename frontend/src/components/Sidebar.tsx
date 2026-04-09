@@ -1,18 +1,20 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   FolderGit2,
   Plus,
   Trash2,
   RefreshCw,
+  RotateCcw,
   Sun,
   Moon,
 //  Telescope,
   ChevronRight,
   MessageSquare,
   PenLine,
+  Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useRepoList, useDeleteRepo } from '@/hooks/useRepos'
+import { useRepoList, useDeleteRepo, useResyncRepo } from '@/hooks/useRepos'
 import { useSessionList, useCreateSession, useDeleteSession } from '@/hooks/useSessions'
 import { useAppStore } from '@/store/app'
 import { RepoConnectDialog } from './RepoConnectDialog'
@@ -208,6 +210,104 @@ function SessionList({ repoId }: { repoId: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Single repo row with resync support
+// ---------------------------------------------------------------------------
+
+function RepoItem({
+  repo,
+  isActive,
+  onSelect,
+  onDeleteClick,
+}: {
+  repo: string
+  isActive: boolean
+  onSelect: () => void
+  onDeleteClick: (e: React.MouseEvent) => void
+}) {
+  const repoSource   = useAppStore((s) => s.repoSources[repo])
+  const { phase, result, start, reset } = useResyncRepo(repo)
+  const isRunning = phase === 'running'
+
+  const resyncAvailable = !!repoSource
+
+  // Toast on completion
+  useEffect(() => {
+    if (phase === 'done' && result) {
+      const changed = result.changed_files ?? 0
+      if (changed === 0) {
+        toast.success(`"${repo}" is already up to date`)
+      } else {
+        toast.success(`"${repo}" resynced — ${changed} file${changed !== 1 ? 's' : ''} updated`)
+      }
+      reset()
+    } else if (phase === 'error' && result) {
+      toast.error(`Resync failed: ${result.error ?? 'unknown error'}`)
+      reset()
+    }
+  }, [phase, result, repo, reset])
+
+  async function handleResync(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!repoSource || isRunning) return
+    await start(repoSource)
+  }
+
+  const canResync = !!repoSource && !isRunning
+
+  return (
+    <button
+      onClick={onSelect}
+      className={cn(
+        'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors',
+        isActive
+          ? 'border-l-2 border-accent-emphasis bg-accent-subtle pl-1.5 font-medium text-accent-fg'
+          : 'text-fg-muted hover:bg-canvas-subtle hover:text-fg-default',
+      )}
+    >
+      <FolderGit2 className="h-3.5 w-3.5 flex-shrink-0" />
+      <span className="flex-1 truncate text-left">{repo}</span>
+
+      {/* Resync button — only shown when source is git-tracked */}
+      {resyncAvailable && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => void handleResync(e)}
+          onKeyDown={(e) => e.key === 'Enter' && void handleResync(e as unknown as React.MouseEvent)}
+          title={isRunning ? 'Resyncing…' : 'Resync embeddings from latest commits'}
+          className={cn(
+            'hidden rounded p-0.5 transition-colors group-hover:block',
+            canResync
+              ? 'text-fg-subtle hover:bg-canvas-default hover:text-accent-fg'
+              : 'cursor-not-allowed text-fg-subtle opacity-50',
+          )}
+        >
+          {isRunning
+            ? <Loader2 className="h-3 w-3 animate-spin" />
+            : <RotateCcw className="h-3 w-3" />
+          }
+        </span>
+      )}
+
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={onDeleteClick}
+        onKeyDown={(e) =>
+          e.key === 'Enter' && onDeleteClick(e as unknown as React.MouseEvent)
+        }
+        className="hidden rounded p-0.5 text-danger-fg transition-colors hover:bg-canvas-default group-hover:block"
+        title="Delete repo"
+      >
+        <Trash2 className="h-3 w-3" />
+      </span>
+
+      {isActive && <ChevronRight className="h-3 w-3 flex-shrink-0" />}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main sidebar
 // ---------------------------------------------------------------------------
 
@@ -282,34 +382,12 @@ export function Sidebar() {
           <ul className="space-y-0.5">
             {repos.map((repo) => (
               <li key={repo}>
-                <button
-                  onClick={() => setActiveRepo(repo)}
-                  className={cn(
-                    'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors',
-                    activeRepoId === repo
-                      ? 'border-l-2 border-accent-emphasis bg-accent-subtle pl-1.5 font-medium text-accent-fg'
-                      : 'text-fg-muted hover:bg-canvas-subtle hover:text-fg-default',
-                  )}
-                >
-                  <FolderGit2 className="h-3.5 w-3.5 flex-shrink-0" />
-                  <span className="flex-1 truncate text-left">{repo}</span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => handleDeleteClick(e, repo)}
-                    onKeyDown={(e) =>
-                      e.key === 'Enter' &&
-                      handleDeleteClick(e as unknown as React.MouseEvent, repo)
-                    }
-                    className="hidden rounded p-0.5 text-danger-fg transition-colors hover:bg-canvas-default group-hover:block"
-                    title="Delete repo"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </span>
-                  {activeRepoId === repo && (
-                    <ChevronRight className="h-3 w-3 flex-shrink-0" />
-                  )}
-                </button>
+                <RepoItem
+                  repo={repo}
+                  isActive={activeRepoId === repo}
+                  onSelect={() => setActiveRepo(repo)}
+                  onDeleteClick={(e) => handleDeleteClick(e, repo)}
+                />
               </li>
             ))}
           </ul>

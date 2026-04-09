@@ -13,7 +13,7 @@ import type { Components } from 'react-markdown'
 // Citation badge — inline code that matches "path/to/file.ext:123"
 // ---------------------------------------------------------------------------
 
-const CITATION_RE = /^([\w./-]+\.[a-zA-Z]+):(\d+)(?:-\d+)?$/
+const CITATION_RE = /^([\w./-]+\.[a-zA-Z]+):(\d+)(?:-(\d+))?$/
 
 function CitationBadge({
   children,
@@ -33,11 +33,16 @@ function CitationBadge({
     )
   }
 
-  const [, filePath, lineStr] = match
+  const [, filePath, lineStr, endLineStr] = match
   return (
     <button
-      onClick={() => openSource({ repoId, filePath, line: parseInt(lineStr) })}
-      title={`Open ${filePath}:${lineStr}`}
+      onClick={() => openSource({
+        repoId,
+        filePath,
+        line:    parseInt(lineStr),
+        endLine: endLineStr ? parseInt(endLineStr) : undefined,
+      })}
+      title={`Open ${filePath}:${lineStr}${endLineStr ? `-${endLineStr}` : ''}`}
       className="inline-flex cursor-pointer items-center gap-1 rounded border border-accent-fg/30 bg-accent-subtle px-1.5 py-0.5 font-mono text-xs text-accent-fg transition-colors hover:bg-accent-muted"
     >
       <FileCode2 className="h-3 w-3 flex-shrink-0" />

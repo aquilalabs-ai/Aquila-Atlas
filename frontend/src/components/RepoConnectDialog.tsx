@@ -91,6 +91,7 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
 
   const qc              = useQueryClient()
   const setActiveRepoId = useAppStore((s) => s.setActiveRepoId)
+  const setRepoSource   = useAppStore((s) => s.setRepoSource)
 
   if (!open) return null
 
@@ -224,6 +225,16 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   function handleComplete() {
     qc.invalidateQueries({ queryKey: ['repos'] })
     setActiveRepoId(repoId)
+    // Persist source info so resync can find it later (local + github only)
+    if (tab === 'local') {
+      setRepoSource(repoId.trim(), { path: localFolderName, source_type: 'local' })
+    } else if (tab === 'github') {
+      setRepoSource(repoId.trim(), {
+        path: githubUrl.trim(),
+        source_type: 'github',
+        github_token: githubToken.trim() || undefined,
+      })
+    }
     toast.success(`"${repoId}" is ready!`)
     dismiss()
   }

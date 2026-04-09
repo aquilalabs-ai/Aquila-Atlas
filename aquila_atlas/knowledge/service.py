@@ -64,6 +64,16 @@ class KnowledgeService:
         """Return all chunk payloads for a specific file in *repo_id*."""
         return self.vector.get_file_chunks(repo_id, file_path)
 
+    def get_repo_commit_sha(self, repo_id: str) -> str | None:
+        """Return the commit SHA last stored for *repo_id*, or None."""
+        return self.graph.get_repo_commit_sha(repo_id)
+
+    def delete_files(self, repo_id: str, file_paths: list[str]) -> dict[str, int]:
+        """Delete specific files from both graph and vector stores."""
+        graph_deleted = self.graph.delete_files(repo_id, file_paths)
+        vector_deleted = self.vector.delete_files(repo_id, file_paths)
+        return {"graph_nodes_deleted": graph_deleted, "vector_chunks_deleted": vector_deleted}
+
     def delete_repo(self, repo_id: str) -> dict[str, int]:
         """Delete all data for *repo_id* from both stores."""
         graph_deleted = self.graph.delete_repo(repo_id)

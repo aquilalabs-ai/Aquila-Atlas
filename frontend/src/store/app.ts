@@ -6,6 +6,7 @@ export interface SourceLocation {
   repoId: string
   filePath: string
   line?: number
+  endLine?: number
 }
 
 export interface ChatMessage {
@@ -18,6 +19,12 @@ export interface ChatMessage {
   outputTokens?: number
 }
 
+export interface RepoSource {
+  path: string
+  source_type: 'local' | 'github'
+  github_token?: string
+}
+
 interface AppState {
   // Theme
   theme: 'dark' | 'light'
@@ -26,6 +33,11 @@ interface AppState {
   // Active repository
   activeRepoId: string | null
   setActiveRepoId: (id: string | null) => void
+
+  // Stored source info per repo (populated on connect, used for resync)
+  repoSources: Record<string, RepoSource>
+  setRepoSource: (repoId: string, source: RepoSource) => void
+  clearRepoSource: (repoId: string) => void
 
   // Active session per repo  (repoId → sessionId)
   activeSessions: Record<string, string>
@@ -65,6 +77,17 @@ export const useAppStore = create<AppState>()(
       // ── Active repo ────────────────────────────────────────────────────
       activeRepoId: null,
       setActiveRepoId: (id) => set({ activeRepoId: id, sourceLocation: null }),
+
+      // ── Repo sources ───────────────────────────────────────────────────
+      repoSources: {},
+      setRepoSource: (repoId, source) =>
+        set((s) => ({ repoSources: { ...s.repoSources, [repoId]: source } })),
+      clearRepoSource: (repoId) =>
+        set((s) => {
+          const next = { ...s.repoSources }
+          delete next[repoId]
+          return { repoSources: next }
+        }),
 
       // ── Active sessions ────────────────────────────────────────────────
       activeSessions: {},
@@ -128,6 +151,7 @@ export const useAppStore = create<AppState>()(
         activeSessions: s.activeSessions,
         chatMessages:   s.chatMessages,
         sessions:       s.sessions,
+        repoSources:    s.repoSources,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {

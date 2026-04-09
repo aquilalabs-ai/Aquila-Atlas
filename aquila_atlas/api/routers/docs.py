@@ -61,6 +61,7 @@ class DocJobRecord:
     current_target: str | None = None
     error: str | None = None
     cancelled: bool = False
+    exclude_extensions: list[str] | None = None
 
 
 _doc_jobs: dict[str, DocJobRecord] = {}
@@ -83,28 +84,46 @@ DocStoreOrNone = Annotated[object, Depends(_get_doc_store)]
 # ---------------------------------------------------------------------------
 
 
-class _JobCancelled(Exception):
-    """Raised inside the worker thread when the job is cancelled."""
-
-
 def _sync_generate(record: DocJobRecord, svc: object) -> dict[str, str]:
-    from aquila_atlas.reasoning.docs_generator import generate_docs  # noqa: PLC0415
+    from aquila_atlas.reasoning.docs_generator import GenerationCancelled, generate_docs  # noqa: PLC0415
 
     def progress(completed: int, total: int, current_target: str | None) -> None:
         if record.cancelled:
-            raise _JobCancelled
+            raise GenerationCancelled
         record.completed = completed
         record.total = total
         record.current_target = current_target
 
-    return generate_docs(
-        svc=svc,  # type: ignore[arg-type]
-        repo_id=record.repo_id,
-        scope=record.scope,  # type: ignore[arg-type]
-        style=record.style,
-        language=record.language,
-        progress_callback=progress,
-    )
+    try:
+        return generate_docs(
+            svc=svc,  # type: ignore[arg-type]
+            repo_id=record.repo_id,
+            scope=record.scope,  # type: ignore[arg-type]
+            style=record.style,
+            language=record.language,
+            exclude_extensions=record.exclude_extensions,
+            progress_callback=progress,
+        )
+    except GenerationCancelled as exc:
+        # Return whatever files were completed before cancellation
+        return exc.partial
+
+
+def _persist_doc(record: DocJobRecord, doc_store: object) -> None:
+    """Save completed (or partial) doc files to the database if available."""
+    if not record.files or doc_store is None:
+        return
+    from aquila_atlas.api.store import DocStore  # noqa: PLC0415
+
+    if isinstance(doc_store, DocStore):
+        doc_store.save_doc(
+            job_id=record.job_id,
+            repo_id=record.repo_id,
+            scope=record.scope,
+            style=record.style,
+            language=record.language,
+            files=record.files,
+        )
 
 
 async def _run_doc_job(job_id: str, svc: object, doc_store: object) -> None:
@@ -117,23 +136,7 @@ async def _run_doc_job(job_id: str, svc: object, doc_store: object) -> None:
         files = await loop.run_in_executor(None, _sync_generate, record, svc)
         record.files = files
         record.status = "done"
-        # Persist to DB if available
-        if doc_store is not None:
-            from aquila_atlas.api.store import DocStore  # noqa: PLC0415
-
-            if isinstance(doc_store, DocStore):
-                doc_store.save_doc(
-                    job_id=record.job_id,
-                    repo_id=record.repo_id,
-                    scope=record.scope,
-                    style=record.style,
-                    language=record.language,
-                    files=record.files,
-                )
-    except _JobCancelled:
-        logger.info("Doc job %s was cancelled", job_id)
-        record.status = "failed"
-        record.error = "Cancelled"
+        _persist_doc(record, doc_store)
     except Exception as exc:
         logger.exception("Doc job %s failed", job_id)
         record.status = "failed"
@@ -170,6 +173,7 @@ async def generate_docs_endpoint(
         scope=body.scope,
         style=body.style,
         language=body.language,
+        exclude_extensions=body.exclude_extensions,
     )
     _doc_jobs[job_id] = record
     doc_store = getattr(request.app.state, "doc_store", None)

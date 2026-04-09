@@ -60,6 +60,7 @@ class RepoStatsResponse(BaseModel):
     relationships: int = Field(0, description="Total graph relationships")
     chunks: int = Field(0, description="Vector chunks stored")
     files: int = Field(0, description="Unique files in vector store")
+    commit_sha: str | None = Field(None, description="Last ingested commit SHA (null for non-git sources)")
 
     model_config = {
         "json_schema_extra": {
@@ -162,6 +163,10 @@ class JobStatus(BaseModel):
     files: int | None = Field(None, description="Files discovered")
     chunks: int | None = Field(None, description="Chunks indexed")
     error: str | None = Field(None, description="Error message if status=failed")
+    ingest_type: str = Field("full", description='"full" | "resync"')
+    changed_files: int | None = Field(None, description="Files re-indexed (resync only)")
+    old_commit_sha: str | None = Field(None, description="Commit SHA before resync")
+    new_commit_sha: str | None = Field(None, description="Commit SHA after resync")
 
     model_config = {
         "json_schema_extra": {
@@ -173,6 +178,28 @@ class JobStatus(BaseModel):
                     "files": 24,
                     "chunks": 198,
                     "error": None,
+                    "ingest_type": "full",
+                    "changed_files": None,
+                    "old_commit_sha": None,
+                    "new_commit_sha": None,
+                }
+            ]
+        }
+    }
+
+
+class ResyncResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    status: str = Field(..., description='"queued" immediately after submission')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "status": "queued",
                 }
             ]
         }
@@ -622,6 +649,14 @@ class DocGenRequest(BaseModel):
     )
     targets: list[str] | None = Field(
         None, description="Optional list of specific files/modules to document"
+    )
+    exclude_extensions: list[str] | None = Field(
+        None,
+        description=(
+            "File extensions to skip (e.g. [\".md\", \".png\"]). "
+            "Pass null to use the built-in defaults (images, markup, binaries, lock files). "
+            "Pass [] to disable extension filtering entirely."
+        ),
     )
 
     model_config = {

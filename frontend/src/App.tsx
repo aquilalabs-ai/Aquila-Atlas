@@ -44,19 +44,21 @@ export default function App() {
                 <span className="ml-3 text-xs text-fg-subtle font-medium">{activeRepoId}</span>
               </div>
 
-              {/* Content */}
+              {/* Content — both panels stay mounted to avoid aborting in-flight streams */}
               <div className="flex flex-1 overflow-hidden">
-                {mainTab === 'chat' ? (
+                <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'chat' && 'hidden')}>
                   <ChatPanel repoId={activeRepoId} />
-                ) : (
+                </div>
+                <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'docs' && 'hidden')}>
                   <DocsPanel repoId={activeRepoId} />
-                )}
+                </div>
 
                 {sourceLocation && (
                   <SourceViewer
                     repoId={sourceLocation.repoId}
                     filePath={sourceLocation.filePath}
                     line={sourceLocation.line}
+                    endLine={sourceLocation.endLine}
                   />
                 )}
               </div>

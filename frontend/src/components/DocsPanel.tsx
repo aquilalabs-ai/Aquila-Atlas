@@ -29,7 +29,7 @@ import { toast } from 'sonner'
 import { api, DocContentResponse, DocLanguage, DocMetadata, DocScope, DocStyle } from '@/lib/api'
 import { useDocGeneration } from '@/hooks/useDocGeneration'
 import { cn } from '@/lib/utils'
-import AQUILA_SVG_SYMBOL from '@/assets/images/aquila-text.svg?raw'
+import AQUILA_SVG_SYMBOL from '@/assets/images/aquila-text-small.svg?raw'
 
 // ---------------------------------------------------------------------------
 // Tree navigation types + builder
@@ -233,7 +233,9 @@ function buildIndexHtml(
   language: string,
   files: { htmlName: string; mdName: string }[],
 ): string {
-  const filesJson = JSON.stringify(files.map((f) => f.htmlName))
+  // Strip the leading 'files/' prefix so the sidebar tree mirrors the original
+  // source layout. The actual load path is reattached in selectFile below.
+  const filesJson = JSON.stringify(files.map((f) => f.htmlName.replace(/^files\//, '')))
 
   // Lucide-style SVG icons as inline strings (no dependencies)
   const SVG_CHEVRON_RIGHT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9,18 15,12 9,6"/></svg>'
@@ -246,7 +248,7 @@ function buildIndexHtml(
     .replace(/<\?xml[^>]*>/g, '')
     .replace(/<!DOCTYPE[^>]*>/g, '')
     .trim()
-  const logoEscaped = logoContent.replace(/'/g, "\\'").replace(/\n/g, ' ')
+  const logoEscaped = logoContent.replace(/'/g, "\\'").replace(/\r\n|\r|\n/g, ' ')
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -352,7 +354,7 @@ function selectFile(path, btn) {
   if (selectedBtn) selectedBtn.classList.remove('selected');
   selectedBtn = btn;
   btn.classList.add('selected');
-  document.getElementById('frame').src = path;
+  document.getElementById('frame').src = 'files/' + path;
   document.getElementById('frame').style.display = 'block';
   document.getElementById('empty').style.display = 'none';
 }
@@ -588,16 +590,17 @@ function DocResult({
       const fileIndex: { htmlName: string; mdName: string }[] = []
 
       for (const [filename, content] of Object.entries(files)) {
-        const htmlName = filename.endsWith('.md')
+        const baseName = filename.endsWith('.md')
           ? filename.slice(0, -3) + '.html'
           : filename + '.html'
+        const htmlName = 'files/' + baseName
         const title = filename
         const bodyHtml = await marked(content)
         zip.file(htmlName, buildHtmlPage(title, bodyHtml, htmlName))
         fileIndex.push({ htmlName, mdName: filename })
       }
 
-      // Add index.html linking to all files
+      // Add index.html at the root, one level above the content files
       zip.file('index.html', buildIndexHtml(repoId, scope, style, language, fileIndex))
 
       const blob = await zip.generateAsync({ type: 'blob' })
@@ -967,6 +970,65 @@ const LANGUAGE_OPTIONS: { value: DocLanguage; label: string }[] = [
   { value: 'ar', label: 'Arabic' },
 ]
 
+const SKIP_PRESETS = [
+  {
+    id: 'images',
+    label: 'Images & media',
+    hint: '.png .jpg .svg .mp4 .mp3 …',
+    extensions: [
+      '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.bmp', '.tiff',
+      '.mp4', '.mp3', '.wav', '.ogg', '.flac', '.avi', '.mov', '.mkv', '.webm',
+    ],
+  },
+  {
+    id: 'docs',
+    label: 'Docs & markup',
+    hint: '.md .rst .txt',
+    extensions: ['.md', '.rst', '.txt'],
+  },
+  {
+    id: 'compiled',
+    label: 'Compiled & binary',
+    hint: '.pyc .class .so .dll .wasm …',
+    extensions: [
+      '.pyc', '.pyo', '.pyd',
+      '.class', '.jar', '.war', '.ear',
+      '.o', '.obj', '.a', '.lib',
+      '.so', '.dll', '.dylib',
+      '.exe', '.out', '.bin', '.apk', '.app', '.wasm', '.rlib',
+    ],
+  },
+  {
+    id: 'data',
+    label: 'Data & config',
+    hint: '.csv .json .yaml .db .log …',
+    extensions: [
+      '.csv', '.parquet', '.feather',
+      '.pkl', '.pickle',
+      '.json', '.yaml', '.yml', '.xml',
+      '.db', '.sqlite',
+      '.npy', '.npz',
+      '.log',
+    ],
+  },
+  {
+    id: 'archives',
+    label: 'Archives',
+    hint: '.zip .tar .gz .7z …',
+    extensions: ['.tar', '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar'],
+  },
+  {
+    id: 'lockfiles',
+    label: 'Lock files',
+    hint: '.lock + package-lock.json …',
+    extensions: ['.lock'],
+  },
+] as const
+
+type SkipPresetId = (typeof SKIP_PRESETS)[number]['id']
+
+const ALL_PRESET_IDS = new Set<SkipPresetId>(SKIP_PRESETS.map((p) => p.id))
+
 // ---------------------------------------------------------------------------
 // Main DocsPanel
 // ---------------------------------------------------------------------------
@@ -978,6 +1040,30 @@ export function DocsPanel({ repoId }: { repoId: string }) {
   const [scope, setScope] = useState<DocScope>('architecture')
   const [style, setStyle] = useState<DocStyle>('technical')
   const [language, setLanguage] = useState<DocLanguage>('en')
+  const [skipPresets, setSkipPresets] = useState<Set<SkipPresetId>>(new Set(ALL_PRESET_IDS))
+
+  // Tick every second while polling so the elapsed / ETA display updates live
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (state.phase !== 'polling') return
+    setNow(Date.now())  // sync immediately so elapsed is correct on resume
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [state.phase])
+
+  function togglePreset(id: SkipPresetId) {
+    setSkipPresets((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function buildExcludeExtensions(): string[] | undefined {
+    // If all presets are on, pass undefined → backend uses its own defaults
+    if (skipPresets.size === ALL_PRESET_IDS.size) return undefined
+    return SKIP_PRESETS.filter((p) => skipPresets.has(p.id)).flatMap((p) => [...p.extensions])
+  }
 
   // When a saved doc is opened, remember to return to saved tab (poll keeps running)
   function handleOpenSaved(content: DocContentResponse) {
@@ -1036,39 +1122,60 @@ export function DocsPanel({ repoId }: { repoId: string }) {
       {activeTab === 'generate' && (
         <div className="flex-1 overflow-y-auto p-4">
           {/* Polling progress */}
-          {state.phase === 'polling' && (
-            <div className="mb-6 space-y-3">
-              <div className="flex items-center justify-between text-xs text-fg-muted">
-                <span>Generating documentation…</span>
-                {state.total > 0 && (
-                  <span>{state.completed}/{state.total}</span>
+          {state.phase === 'polling' && (() => {
+            const elapsed = Math.floor((now - state.startedAt) / 1000)
+            const elapsedStr = elapsed < 60
+              ? `${elapsed}s`
+              : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+
+            // ETA: only meaningful once we have completed ≥ 1 and know total
+            let etaStr: string | null = null
+            if (state.total > 0 && state.completed > 0 && state.completed < state.total) {
+              const rate = elapsed / state.completed          // s per item
+              const remaining = Math.round(rate * (state.total - state.completed))
+              etaStr = remaining < 60
+                ? `~${remaining}s left`
+                : `~${Math.floor(remaining / 60)}m ${remaining % 60}s left`
+            }
+
+            return (
+              <div className="mb-6 space-y-3">
+                <div className="flex items-center justify-between text-xs text-fg-muted">
+                  <span>Generating documentation…</span>
+                  <span className="flex items-center gap-2">
+                    {state.total > 0 && (
+                      <span>{state.completed}/{state.total}</span>
+                    )}
+                    <span className="text-fg-subtle">{elapsedStr}</span>
+                    {etaStr && <span className="text-fg-subtle">{etaStr}</span>}
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-canvas-subtle">
+                  <div
+                    className="h-full rounded-full bg-accent-emphasis transition-all duration-500"
+                    style={{
+                      width: state.total > 0
+                        ? `${Math.round((state.completed / state.total) * 100)}%`
+                        : '10%',
+                    }}
+                  />
+                </div>
+                {state.currentTarget && (
+                  <p className="text-[11px] text-fg-subtle truncate">
+                    Processing: <span className="font-mono">{state.currentTarget}</span>
+                  </p>
                 )}
+                <button
+                  type="button"
+                  onClick={() => void cancel(state.jobId)}
+                  className="mt-1 flex items-center gap-1.5 rounded-md border border-danger-emphasis/40 px-2.5 py-1 text-xs text-danger-fg transition-colors hover:bg-danger-subtle"
+                >
+                  <X className="h-3 w-3" />
+                  Cancel generation
+                </button>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-canvas-subtle">
-                <div
-                  className="h-full rounded-full bg-accent-emphasis transition-all duration-500"
-                  style={{
-                    width: state.total > 0
-                      ? `${Math.round((state.completed / state.total) * 100)}%`
-                      : '10%',
-                  }}
-                />
-              </div>
-              {state.currentTarget && (
-                <p className="text-[11px] text-fg-subtle truncate">
-                  Processing: <span className="font-mono">{state.currentTarget}</span>
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={() => void cancel(state.jobId)}
-                className="mt-1 flex items-center gap-1.5 rounded-md border border-danger-emphasis/40 px-2.5 py-1 text-xs text-danger-fg transition-colors hover:bg-danger-subtle"
-              >
-                <X className="h-3 w-3" />
-                Cancel generation
-              </button>
-            </div>
-          )}
+            )
+          })()}
 
           {/* Error */}
           {state.phase === 'error' && (
@@ -1146,8 +1253,39 @@ export function DocsPanel({ repoId }: { repoId: string }) {
                 </select>
               </div>
 
+              {/* Skip file types */}
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-fg-default">
+                  Skip file types
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {SKIP_PRESETS.map((preset) => {
+                    const active = skipPresets.has(preset.id)
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => togglePreset(preset.id)}
+                        title={preset.hint}
+                        className={cn(
+                          'rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors',
+                          active
+                            ? 'border-accent-emphasis bg-accent-subtle text-accent-fg'
+                            : 'border-border-default text-fg-subtle hover:border-fg-subtle hover:text-fg-default',
+                        )}
+                      >
+                        {active ? '✕ ' : '+ '}{preset.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="mt-1 text-[10px] text-fg-subtle">
+                  Active presets are excluded from generation. Git/editor config files are always skipped.
+                </p>
+              </div>
+
               <button
-                onClick={() => void generate(scope, style, language)}
+                onClick={() => void generate(scope, style, language, buildExcludeExtensions())}
                 disabled={state.phase === 'submitting'}
                 className="w-full rounded-md bg-accent-emphasis py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >

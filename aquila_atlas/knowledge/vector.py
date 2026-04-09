@@ -381,6 +381,41 @@ class VectorStore:
 
         return sorted(chunks, key=lambda c: int(c.get("start_line", 0)))
 
+    def delete_files(self, repo_id: str, file_paths: list[str]) -> int:
+        """Delete all points for the given *file_paths* within *repo_id*.
+
+        Returns the number of points deleted.
+        """
+        if not file_paths:
+            return 0
+        collections = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME not in collections:
+            return 0
+
+        from qdrant_client.models import (  # noqa: PLC0415
+            FieldCondition,
+            Filter,
+            MatchAny,
+            MatchValue,
+        )
+
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(key="repo_id", match=MatchValue(value=repo_id)),
+                FieldCondition(key="file_path", match=MatchAny(any=file_paths)),
+            ]
+        )
+        count_before = self._client.count(
+            collection_name=COLLECTION_NAME,
+            count_filter=qdrant_filter,
+            exact=True,
+        ).count
+        self._client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=qdrant_filter,
+        )
+        return count_before
+
     def delete_repo(self, repo_id: str) -> int:
         """Delete all points for *repo_id* from the collection.
 

@@ -22,8 +22,9 @@ from aquila_atlas.api.models import (
     IngestResponse,
     RepoListResponse,
     RepoStatsResponse,
+    ResyncResponse,
 )
-from aquila_atlas.api.tasks import create_job, run_ingestion
+from aquila_atlas.api.tasks import create_job, create_resync_job, run_ingestion, run_resync
 
 router = APIRouter(prefix="/repos", tags=["Repositories"])
 
@@ -83,6 +84,53 @@ async def upload_zip(
     return IngestResponse(job_id=record.job_id, repo_id=record.repo_id, status=record.status)
 
 
+@router.post(
+    "/{repo_id}/resync",
+    response_model=ResyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Resync embeddings from new commits",
+    description=(
+        "Detect commits made since the last ingest, compute the diff, and re-embed "
+        "only the changed files.  Requires the repo to have been ingested at least once "
+        "with a git-tracked source (local path or GitHub URL). "
+        "Poll `GET /jobs/{job_id}` for progress; the response includes `changed_files`, "
+        "`old_commit_sha`, and `new_commit_sha` when done."
+    ),
+    responses={
+        401: {"model": ErrorResponse, "description": "Invalid or missing API key"},
+        404: {"model": ErrorResponse, "description": "Repo not found"},
+        409: {"model": ErrorResponse, "description": "Repo already up to date or resync not supported"},
+    },
+)
+async def resync_repo(
+    repo_id: str,
+    background_tasks: BackgroundTasks,
+    svc: Svc,
+    _auth: Auth,
+    path: str = Query("", description="Local path or GitHub URL (required for local/github sources)"),
+    source_type: str = Query("local", description='"local" or "github"'),
+    github_token: str = Query("", description="Optional GitHub PAT for private repos"),
+) -> ResyncResponse:
+    if repo_id not in svc.list_repo_ids():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Repo '{repo_id}' not found",
+        )
+    if source_type == "zip":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resync is not supported for zip sources — re-ingest instead.",
+        )
+    record = create_resync_job(
+        repo_id=repo_id,
+        path=path,
+        source_type=source_type,
+        github_token=github_token,
+    )
+    background_tasks.add_task(run_resync, record.job_id)
+    return ResyncResponse(job_id=record.job_id, repo_id=record.repo_id, status=record.status)
+
+
 @router.get(
     "",
     response_model=RepoListResponse,
@@ -125,6 +173,7 @@ def repo_stats(repo_id: str, svc: Svc, _auth: Auth) -> RepoStatsResponse:
         relationships=raw.get("relationships", 0),
         chunks=raw.get("chunks", 0),
         files=raw.get("files", 0),
+        commit_sha=svc.get_repo_commit_sha(repo_id),
     )
 
 

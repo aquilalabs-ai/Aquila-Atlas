@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import subprocess
 import tarfile
 import time
 import zipfile
@@ -276,6 +277,34 @@ class GitHubLoader:
     def label(self) -> str:
         return self.url
 
+    def head_sha(self) -> str | None:
+        """Return the current HEAD commit SHA for this GitHub repo, or None."""
+        try:
+            with httpx.Client() as client:
+                branch = self._resolve_branch(client)
+                return self._latest_sha(client, branch)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def diff_files(self, old_sha: str, new_sha: str) -> list[str]:
+        """Return file paths changed between *old_sha* and *new_sha* via the GitHub compare API.
+
+        Includes added, modified, renamed, and deleted files.
+        """
+        try:
+            with httpx.Client() as client:
+                data = self._get_json(
+                    client,
+                    f"/repos/{self.owner}/{self.repo}/compare/{old_sha}...{new_sha}",
+                )
+            assert isinstance(data, dict)
+            files = data.get("files", [])
+            assert isinstance(files, list)
+            paths = [str(f["filename"]) for f in files if isinstance(f, dict) and "filename" in f]
+            return [p for p in paths if not _should_ignore(p)]
+        except Exception:  # noqa: BLE001
+            return []
+
     def metadata(self) -> SourceMetadata:
         with httpx.Client() as client:
             branch = self._resolve_branch(client)
@@ -298,6 +327,19 @@ class GitHubLoader:
 
             tarball = self._download_tarball(client, branch)
 
+        yield from self._iter_tarball(tarball)
+
+    def load_paths(self, file_paths: list[str]) -> Iterator[RawFile]:
+        """Yield only the files whose relative path is in *file_paths*."""
+        wanted = set(file_paths)
+        with httpx.Client() as client:
+            branch = self._resolve_branch(client)
+            tarball = self._download_tarball(client, branch)
+        for raw in self._iter_tarball(tarball):
+            if raw.path in wanted:
+                yield raw
+
+    def _iter_tarball(self, tarball: bytes) -> Iterator[RawFile]:
         with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tf:
             for member in tf.getmembers():
                 if not member.isfile():
@@ -340,9 +382,49 @@ class LocalFolderLoader:
     def load(self) -> Iterator[RawFile]:
         yield from self._iter_files()
 
+    def load_paths(self, file_paths: list[str]) -> Iterator[RawFile]:
+        """Yield only the files whose relative path is in *file_paths*."""
+        wanted = set(file_paths)
+        for raw in self._iter_files():
+            if raw.path in wanted:
+                yield raw
+
     def metadata(self) -> SourceMetadata:
         files = list(self._iter_files())
         return SourceMetadata(label=self.label(), languages=detect_languages(files))
+
+    def head_sha(self) -> str | None:
+        """Return the current HEAD commit SHA for the local git repo, or None."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            return result.stdout.strip() or None
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+
+    def diff_files(self, old_sha: str, new_sha: str) -> list[str]:
+        """Return file paths changed between *old_sha* and *new_sha* (relative, forward-slash).
+
+        Includes added, modified, and deleted files.  Only files that would
+        normally be loaded (not ignored) are returned.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.root), "diff", "--name-only", old_sha, new_sha],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            )
+            paths = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+            return [p for p in paths if not _should_ignore(p)]
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            return []
 
 
 # ---------------------------------------------------------------------------

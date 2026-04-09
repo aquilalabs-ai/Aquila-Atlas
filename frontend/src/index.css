@@ -136,3 +136,6 @@
 .prose-chat hr     { @apply border-border-default my-3; }
 .prose-chat strong { @apply font-semibold text-fg-default; }
 
+/* Monaco cited-range highlight (citation badge → SourceViewer) */
+.monaco-cited-range { background: rgba(56, 139, 253, 0.12) !important; }
+
