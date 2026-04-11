@@ -1,0 +1,329 @@
+/**
+ * Typed API client for the Aquila-Atlas REST backend.
+ * In development, all calls go through the Vite proxy (VITE_API_URL is empty).
+ * In production, set VITE_API_URL to the deployed backend URL.
+ */
+
+const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+
+function authHeaders(): Record<string, string> {
+  const key = import.meta.env.VITE_API_KEY as string | undefined
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (key) h['X-API-Key'] = key
+  return h
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(text)
+  }
+  return res.json() as Promise<T>
+}
+
+// ---------------------------------------------------------------------------
+// Response types (mirrors aquila_atlas/api/models.py)
+// ---------------------------------------------------------------------------
+
+export interface RepoListResponse {
+  repos: string[]
+  total: number
+}
+
+export interface RepoStatsResponse {
+  repo_id: string
+  Repository: number
+  File: number
+  Class: number
+  Function: number
+  Method: number
+  relationships: number
+  chunks: number
+  files: number
+  commit_sha: string | null
+}
+
+export interface IngestResponse {
+  job_id: string
+  repo_id: string
+  status: string
+}
+
+export type JobStatusKind = 'queued' | 'running' | 'done' | 'failed'
+
+export interface JobStatus {
+  job_id: string
+  repo_id: string
+  status: JobStatusKind
+  files?: number
+  chunks?: number
+  error?: string
+  ingest_type?: 'full' | 'resync'
+  changed_files?: number
+  old_commit_sha?: string
+  new_commit_sha?: string
+}
+
+export interface ResyncResponse {
+  job_id: string
+  repo_id: string
+  status: string
+}
+
+export interface SearchResult {
+  file_path: string
+  start_line: number
+  end_line: number
+  chunk_type: string
+  qualified_name: string
+  language: string
+  score: number
+  content: string
+}
+
+export interface SearchResponse {
+  query: string
+  repo_id: string
+  results: SearchResult[]
+  total: number
+}
+
+export interface ChatResponse {
+  response: string
+  session_id: string
+}
+
+export interface FileChunk {
+  file_path: string
+  chunk_type: string
+  start_line: number
+  end_line: number
+  qualified_name: string
+  language: string
+  chunk_index: number
+  chunk_total: number
+  content: string
+}
+
+export interface FileChunksResponse {
+  repo_id: string
+  file_path: string
+  chunks: FileChunk[]
+  total: number
+}
+
+export interface DeleteRepoResponse {
+  repo_id: string
+  graph_nodes_deleted: number
+  vector_chunks_deleted: number
+}
+
+// ---------------------------------------------------------------------------
+// Documentation generation
+// ---------------------------------------------------------------------------
+
+export type DocScope    = 'architecture' | 'per_module' | 'per_file' | 'subsystem' | 'flows'
+export type DocStyle    = 'technical' | 'functional'
+export type DocLanguage = 'en' | 'fr' | 'es' | 'de' | 'zh' | 'ja' | 'pt' | 'ar'
+
+export interface DocGenRequest {
+  scope: DocScope
+  style: DocStyle
+  language: DocLanguage
+  targets?: string[]
+  exclude_extensions?: string[]
+}
+
+export interface DocGenResponse {
+  job_id: string
+  repo_id: string
+  status: string
+}
+
+export type DocJobStatusKind = 'queued' | 'running' | 'done' | 'failed'
+
+export interface DocJobStatus {
+  job_id: string
+  repo_id: string
+  scope: string
+  style: string
+  language: string
+  status: DocJobStatusKind
+  completed?: number
+  total?: number
+  current_target?: string
+  error?: string
+  files?: string[]
+}
+
+export interface DocMetadata {
+  job_id: string
+  repo_id: string
+  scope: string
+  style: string
+  language: string
+  created_at: string
+}
+
+export interface DocContentResponse {
+  job_id: string
+  repo_id: string
+  scope: string
+  style: string
+  language: string
+  files: Record<string, string>
+}
+
+// ---------------------------------------------------------------------------
+// Sessions
+// ---------------------------------------------------------------------------
+
+export interface SessionInfo {
+  session_id: string
+  repo_id: string
+  title: string
+  created_at: string
+  message_count: number
+}
+
+export interface SessionListResponse {
+  repo_id: string
+  sessions: SessionInfo[]
+  total: number
+}
+
+export interface SessionCreateResponse {
+  session_id: string
+  repo_id: string
+  title: string
+  created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// API surface
+// ---------------------------------------------------------------------------
+
+export const api = {
+  // Health
+  health: () => request<{ status: string; version: string }>('/health'),
+  ready:  () => request<{ status: string; neo4j: boolean; qdrant: boolean }>('/health/ready'),
+
+  // Repos
+  listRepos:   () => request<RepoListResponse>('/repos'),
+  getRepoStats: (repoId: string) =>
+    request<RepoStatsResponse>(`/repos/${encodeURIComponent(repoId)}/stats`),
+  deleteRepo: (repoId: string, opts?: { deleteSessions?: boolean; deleteDocs?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.deleteSessions) params.set('delete_sessions', 'true')
+    if (opts?.deleteDocs) params.set('delete_docs', 'true')
+    const qs = params.toString()
+    return request<DeleteRepoResponse>(
+      `/repos/${encodeURIComponent(repoId)}${qs ? `?${qs}` : ''}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  // Ingestion
+  ingest: (opts: { repo_id: string; source_type: string; path?: string; github_token?: string }) =>
+    request<IngestResponse>('/repos', {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    }),
+  uploadZip: async (repoId: string, file: File): Promise<IngestResponse> => {
+    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+    const key = import.meta.env.VITE_API_KEY as string | undefined
+    const form = new FormData()
+    form.append('repo_id', repoId)
+    form.append('file', file)
+    const headers: Record<string, string> = {}
+    if (key) headers['X-API-Key'] = key
+    const res = await fetch(`${base}/repos/upload`, {
+      method: 'POST',
+      headers,
+      body: form,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new Error(text)
+    }
+    return res.json() as Promise<IngestResponse>
+  },
+  getRepoStatus: (repoId: string) =>
+    request<JobStatus>(`/repos/${encodeURIComponent(repoId)}/status`),
+  getJob: (jobId: string) =>
+    request<JobStatus>(`/jobs/${encodeURIComponent(jobId)}`),
+  resyncRepo: (repoId: string, opts: { path: string; source_type: string; github_token?: string }) => {
+    const params = new URLSearchParams({ path: opts.path, source_type: opts.source_type })
+    if (opts.github_token) params.set('github_token', opts.github_token)
+    return request<ResyncResponse>(
+      `/repos/${encodeURIComponent(repoId)}/resync?${params.toString()}`,
+      { method: 'POST' },
+    )
+  },
+
+  // Search
+  search: (repoId: string, q: string, topK = 10) =>
+    request<SearchResponse>(
+      `/repos/${encodeURIComponent(repoId)}/search?q=${encodeURIComponent(q)}&top_k=${topK}`,
+    ),
+
+  // Chat (non-streaming fallback)
+  chatJson: (repoId: string, message: string, sessionId?: string) =>
+    request<ChatResponse>(`/repos/${encodeURIComponent(repoId)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ message, session_id: sessionId, stream: false }),
+    }),
+
+  // Sessions
+  listSessions: (repoId: string) =>
+    request<SessionListResponse>(`/repos/${encodeURIComponent(repoId)}/sessions`),
+  createSession: (repoId: string, title = 'New Chat') =>
+    request<SessionCreateResponse>(`/repos/${encodeURIComponent(repoId)}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  deleteSession: (repoId: string, sessionId: string) =>
+    request<{ session_id: string; deleted: boolean }>(
+      `/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    ),
+  resetSession: (repoId: string, sessionId: string) =>
+    request<{ session_id: string; cleared: boolean }>(
+      `/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(sessionId)}/reset`,
+      { method: 'POST' },
+    ),
+
+  // Files
+  getFileChunks: (repoId: string, filePath: string) =>
+    request<FileChunksResponse>(
+      `/repos/${encodeURIComponent(repoId)}/files/${filePath
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')}`,
+    ),
+
+  // Documentation generation
+  generateDocs: (repoId: string, req: DocGenRequest) =>
+    request<DocGenResponse>(`/repos/${encodeURIComponent(repoId)}/docs/generate`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  getDocJobStatus: (repoId: string, jobId: string) =>
+    request<DocJobStatus>(`/repos/${encodeURIComponent(repoId)}/docs/jobs/${encodeURIComponent(jobId)}`),
+  getDocContent: (repoId: string, jobId: string) =>
+    request<DocContentResponse>(`/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}`),
+  listRepoDocs: (repoId: string) =>
+    request<{ repo_id: string; docs: DocMetadata[]; total: number }>(`/repos/${encodeURIComponent(repoId)}/docs`),
+  cancelDocJob: (repoId: string, jobId: string) =>
+    request<DocJobStatus>(`/repos/${encodeURIComponent(repoId)}/docs/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  deleteDoc: (repoId: string, jobId: string) =>
+    request<{ success: boolean; job_id: string; message: string }>(`/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+  getDocDownloadUrl: (repoId: string, jobId: string): string => {
+    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+    return `${base}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-zip`
+  },
+}
