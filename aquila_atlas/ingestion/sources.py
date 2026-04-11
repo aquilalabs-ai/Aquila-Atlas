@@ -238,6 +238,34 @@ class GitHubLoader:
             if resp.status_code in {500, 502, 503, 504} and attempt < retries - 1:
                 time.sleep(2**attempt)
                 continue
+            if resp.status_code == 404:
+                if self.token:
+                    raise ValueError(
+                        f"Repository not found or access denied. "
+                        f"Check that the repository exists and your GitHub token has access to private repositories. "
+                        f"URL: {self.url}"
+                    ) from None
+                else:
+                    raise ValueError(
+                        f"Repository not found. If this is a private repository, "
+                        f"provide a GitHub token with 'repo' scope. URL: {self.url}"
+                    ) from None
+            if resp.status_code == 401:
+                raise ValueError(
+                    f"GitHub token authentication failed. "
+                    f"Check that your token is valid and has not expired. URL: {self.url}"
+                ) from None
+            if resp.status_code == 403:
+                if "rate limit" in resp.text.lower():
+                    raise ValueError(
+                        f"GitHub API rate limit exceeded. "
+                        f"Try again later or provide a GitHub token. URL: {self.url}"
+                    ) from None
+                else:
+                    raise ValueError(
+                        f"GitHub API access forbidden. "
+                        f"Check your token permissions. URL: {self.url}"
+                    ) from None
             resp.raise_for_status()
             return resp.json()
         resp.raise_for_status()  # unreachable, satisfies type checker
