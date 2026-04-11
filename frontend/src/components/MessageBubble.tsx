@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useId } from 'react'
+import { useState, useEffect, useRef, useId, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { User, Bot, Copy, Check, FileCode2, ChevronDown, ChevronUp } from 'lucide-react'
+import { User, Bot, Copy, Check, FileCode2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store/app'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/hooks/useChat'
@@ -264,18 +264,20 @@ function CodeBlock({ language, children, isStreaming }: { language: string; chil
 // ---------------------------------------------------------------------------
 
 interface Props {
-  message: Message
-  repoId:  string
+  message:       Message
+  repoId:        string
+  isLast?:       boolean
+  onRegenerate?: () => void
 }
 
-export function MessageBubble({ message, repoId }: Props) {
+export function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) {
   const isUser = message.role === 'user'
 
-  const components: Components = {
+  const components = useMemo<Components>(() => ({
     code({ className, children, ...props }) {
       const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? ''
-      const isBlock  = Boolean(className?.startsWith('language-'))
       const text     = String(children).replace(/\n$/, '')
+      const isBlock  = Boolean(className?.startsWith('language-')) || text.includes('\n')
 
       if (isBlock) {
         return <CodeBlock language={language} isStreaming={message.isStreaming}>{text}</CodeBlock>
@@ -301,7 +303,7 @@ export function MessageBubble({ message, repoId }: Props) {
     pre({ children }) {
       return <>{children}</>
     },
-  }
+  }), [message.isStreaming, repoId])
 
   return (
     <div className={cn('flex gap-3 px-4 py-3', isUser && 'flex-row-reverse')}>
@@ -339,9 +341,20 @@ export function MessageBubble({ message, repoId }: Props) {
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
               {message.content || (message.isStreaming ? '' : '')}
             </ReactMarkdown>
-            {!message.isStreaming && message.inputTokens !== undefined && message.outputTokens !== undefined && (
+            {!message.isStreaming && (message.inputTokens !== undefined && message.outputTokens !== undefined) && (
               <div className="mt-2 flex items-center gap-2 text-xs text-fg-subtle">
                 <span>Tokens: {message.inputTokens} in / {message.outputTokens} out</span>
+              </div>
+            )}
+            {!message.isStreaming && isLast && onRegenerate && (
+              <div className="mt-2">
+                <button
+                  onClick={onRegenerate}
+                  className="flex items-center gap-1.5 text-xs text-fg-subtle transition-colors hover:text-fg-default"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Regenerate
+                </button>
               </div>
             )}
             {message.isStreaming && (
