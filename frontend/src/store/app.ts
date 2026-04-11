@@ -156,6 +156,12 @@ export const useAppStore = create<AppState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           document.documentElement.classList.toggle('dark', state.theme === 'dark')
+          // Clear any messages that were left in a streaming state from a previous session
+          for (const sid of Object.keys(state.chatMessages)) {
+            state.chatMessages[sid] = state.chatMessages[sid].map((m) =>
+              m.isStreaming ? { ...m, isStreaming: false, status: undefined } : m,
+            )
+          }
         }
       },
     },

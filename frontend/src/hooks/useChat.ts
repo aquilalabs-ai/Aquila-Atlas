@@ -29,9 +29,11 @@ export function useChat(repoId: string) {
   const lastMsg   = messages[messages.length - 1]
   const isLoading = lastMsg?.role === 'assistant' && lastMsg?.isStreaming === true
 
-  // Abort any in-flight stream when repoId changes
+  // When the repo changes, release the loading lock for the new context.
+  // Do NOT abort the old stream — let it complete in the background so its
+  // message is preserved in the store and visible when the user switches back.
   useEffect(() => {
-    return () => { abortCtlRef.current?.abort() }
+    isLoadingRef.current = false
   }, [repoId])
 
   const send = useCallback(
@@ -132,5 +134,19 @@ export function useChat(repoId: string) {
     [repoId, activeSessionId, appendMessage, updateMessage, setActiveSession, qc],
   )
 
-  return { messages, isLoading, error: null as string | null, send }
+  const regenerate = useCallback(async () => {
+    if (!activeSessionId || isLoadingRef.current) return
+    const current = useAppStore.getState().chatMessages[activeSessionId] ?? []
+    // Find the last user message preceding the last assistant message
+    const lastUserMsg = [...current].reverse().find((m) => m.role === 'user')
+    if (!lastUserMsg) return
+    // Drop the last assistant message so we get a fresh one
+    const withoutLast = current[current.length - 1]?.role === 'assistant'
+      ? current.slice(0, -1)
+      : current
+    useAppStore.getState().setChatMessages(activeSessionId, withoutLast)
+    await send(lastUserMsg.content)
+  }, [activeSessionId, send])
+
+  return { messages, isLoading, error: null as string | null, send, regenerate }
 }

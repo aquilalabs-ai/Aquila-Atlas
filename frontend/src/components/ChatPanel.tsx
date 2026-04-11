@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function ChatPanel({ repoId }: Props) {
-  const { messages, isLoading, send } = useChat(repoId)
+  const { messages, isLoading, send, regenerate } = useChat(repoId)
   const { data: stats }               = useRepoStats(repoId)
   const activeSessionId               = useAppStore((s) => s.activeSessions[repoId])
 
@@ -66,8 +66,14 @@ export function ChatPanel({ repoId }: Props) {
           </div>
         ) : (
           <div className="py-2">
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} repoId={repoId} />
+            {messages.map((msg, i) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                repoId={repoId}
+                isLast={i === messages.length - 1}
+                onRegenerate={regenerate}
+              />
             ))}
             <div ref={bottomRef} className="h-2" />
           </div>

@@ -657,8 +657,14 @@ def _generate_flows(
     language: str,
     llm: Any,
     progress_callback: Callable[[int, int, str | None], None] | None,
+    exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
     entry_points = svc.get_entry_points(repo_id)
+    if exclude_extensions:
+        entry_points = [
+            ep for ep in entry_points
+            if not any(ep["file_path"].lower().endswith(ext) for ext in exclude_extensions)
+        ]
     if not entry_points:
         return {
             "flows/no_entry_points.md": "# No entry points found\n\nNo public functions without callers were detected in this repository."
