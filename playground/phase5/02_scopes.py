@@ -26,14 +26,14 @@ import httpx
 # Config
 # ──────────────────────────────────────────────
 BASE_URL = "http://localhost:8000"
-REPO_ID  = "playground-full"
-API_KEY  = os.getenv("API_KEY", "")
-STYLE    = "technical"
+REPO_ID = "playground-full"
+API_KEY = os.getenv("API_KEY", "")
+STYLE = "technical"
 LANGUAGE = "en"
-SCOPES   = ["architecture", "per_module", "per_file", "subsystem", "flows"]
+SCOPES = ["architecture", "per_module", "per_file", "subsystem", "flows"]
 
 headers = {"X-API-Key": API_KEY} if API_KEY else {}
-client  = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
+client = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
 
 results: list[dict[str, object]] = []
 
@@ -51,8 +51,8 @@ for scope in SCOPES:
         print(f"  Submit failed: {resp.status_code} {resp.text}")
         results.append({"scope": scope, "status": "submit_failed", "files": 0, "elapsed": 0})
         continue
-    job_id  = resp.json()["job_id"]
-    start   = time.time()
+    job_id = resp.json()["job_id"]
+    start = time.time()
     print(f"  job_id={job_id}")
 
     # Poll
@@ -62,10 +62,10 @@ for scope in SCOPES:
         if resp.status_code != 200:
             final_status = f"poll_error_{resp.status_code}"
             break
-        data   = resp.json()
+        data = resp.json()
         status = data.get("status", "?")
-        done   = data.get("completed", 0)
-        total  = data.get("total", 0)
+        done = data.get("completed", 0)
+        total = data.get("total", 0)
         target = data.get("current_target") or ""
         print(f"  {status:8}  {done}/{total if total else '?'}  {target}", end="\r")
         if status == "done":
@@ -77,18 +77,22 @@ for scope in SCOPES:
         time.sleep(2)
     print()  # clear \r line
 
-    elapsed   = time.time() - start
+    elapsed = time.time() - start
     file_list = data.get("files", []) if final_status == "done" else []
-    results.append({
-        "scope":   scope,
-        "status":  final_status,
-        "files":   len(file_list),
-        "elapsed": round(elapsed, 1),
-        "job_id":  job_id,
-    })
+    results.append(
+        {
+            "scope": scope,
+            "status": final_status,
+            "files": len(file_list),
+            "elapsed": round(elapsed, 1),
+            "job_id": job_id,
+        }
+    )
 
     if final_status == "done":
-        print(f"  Done in {elapsed:.1f}s — {len(file_list)} files: {file_list[:5]}{'…' if len(file_list) > 5 else ''}")
+        print(
+            f"  Done in {elapsed:.1f}s — {len(file_list)} files: {file_list[:5]}{'…' if len(file_list) > 5 else ''}"
+        )
 
 # ──────────────────────────────────────────────
 # Summary table

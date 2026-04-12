@@ -99,7 +99,10 @@ async def upload_zip(
     responses={
         401: {"model": ErrorResponse, "description": "Invalid or missing API key"},
         404: {"model": ErrorResponse, "description": "Repo not found"},
-        409: {"model": ErrorResponse, "description": "Repo already up to date or resync not supported"},
+        409: {
+            "model": ErrorResponse,
+            "description": "Repo already up to date or resync not supported",
+        },
     },
 )
 async def resync_repo(
@@ -107,7 +110,9 @@ async def resync_repo(
     background_tasks: BackgroundTasks,
     svc: Svc,
     _auth: Auth,
-    path: str = Query("", description="Local path or GitHub URL (required for local/github sources)"),
+    path: str = Query(
+        "", description="Local path or GitHub URL (required for local/github sources)"
+    ),
     source_type: str = Query("local", description='"local" or "github"'),
     github_token: str = Query("", description="Optional GitHub PAT for private repos"),
 ) -> ResyncResponse:

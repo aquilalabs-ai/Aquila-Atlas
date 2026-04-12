@@ -29,11 +29,11 @@ import httpx
 # Config
 # ──────────────────────────────────────────────
 BASE_URL = "http://localhost:8000"
-REPO_ID  = "playground-full"
-API_KEY  = os.getenv("API_KEY", "")
+REPO_ID = "playground-full"
+API_KEY = os.getenv("API_KEY", "")
 
 headers = {"X-API-Key": API_KEY} if API_KEY else {}
-client  = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
+client = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
 
 # ──────────────────────────────────────────────
 # 1. List saved docs
@@ -73,11 +73,11 @@ resp = client.get(f"/repos/{REPO_ID}/docs/{job_id}")
 print(f"Status : {resp.status_code}")
 if resp.status_code == 200:
     content = resp.json()
-    files   = content.get("files", {})
+    files = content.get("files", {})
     print(f"Files  : {sorted(files.keys())}")
     if files:
-        name    = sorted(files.keys())[0]
-        text    = files[name]
+        name = sorted(files.keys())[0]
+        text = files[name]
         preview = text[:500].replace("\n", "↵ ")
         print(f"\nPreview of {name!r}:")
         print(f"  {preview}{'…' if len(text) > 500 else ''}")

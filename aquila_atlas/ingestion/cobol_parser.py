@@ -25,7 +25,6 @@ from pathlib import Path
 
 from aquila_atlas.ingestion.metadata import CodeEntity
 
-
 # ---------------------------------------------------------------------------
 # Internal COBOL AST types
 # ---------------------------------------------------------------------------
@@ -228,9 +227,7 @@ def _extract_paragraphs(parsed: _ParsedCobol) -> None:
 def _extract_copy_references(parsed: _ParsedCobol) -> None:
     refs: list[str] = []
     copy_pattern = re.compile(r"\bCOPY\s+([A-Z0-9]+)", re.IGNORECASE)
-    sql_include = re.compile(
-        r"\bEXEC\s+SQL\s+INCLUDE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE
-    )
+    sql_include = re.compile(r"\bEXEC\s+SQL\s+INCLUDE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
     for line in parsed.lines:
         if line.strip().startswith("*"):
             continue
@@ -291,7 +288,11 @@ def parse_cobol(source_bytes: bytes, file_path: str) -> list[CodeEntity]:
 
     header_doc = "\n".join(parsed.header_comments) if parsed.header_comments else None
     if parsed.program_description:
-        header_doc = (header_doc + "\n\n" + parsed.program_description) if header_doc else parsed.program_description
+        header_doc = (
+            (header_doc + "\n\n" + parsed.program_description)
+            if header_doc
+            else parsed.program_description
+        )
 
     # Program-ID as name; fall back to stem when PROGRAM-ID is absent (copybooks)
     prog_name = parsed.program_id or path.stem.upper()
@@ -380,7 +381,7 @@ def _extract_cobol_calls(entities: list[CodeEntity]) -> list[tuple[str, str, str
         if entity.docstring and "PERFORMS:" in entity.docstring:
             for line in entity.docstring.splitlines():
                 if line.startswith("PERFORMS:"):
-                    targets_str = line[len("PERFORMS:"):].strip()
+                    targets_str = line[len("PERFORMS:") :].strip()
                     for target in targets_str.split(","):
                         target = target.strip()
                         if target:

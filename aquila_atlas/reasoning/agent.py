@@ -15,7 +15,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 
-_RouteType = Literal["structural", "implementation", "generation", "diagram", "direct"]
+_RouteType = Literal["structural", "implementation", "analysis", "generation", "diagram", "direct"]
 
 logger = logging.getLogger("aquila.reasoning")
 
@@ -114,6 +114,7 @@ _ROUTER_PROMPT = _load_prompt("router")
 _SKILL_MAP: dict[str, str] = {
     "structural": _load_prompt("skill_architecture"),
     "implementation": _load_prompt("skill_implementation"),
+    "analysis": _load_prompt("skill_analysis"),
     "generation": _load_prompt("skill_documentation"),
     "diagram": _load_prompt("skill_diagram"),
 }
@@ -178,6 +179,8 @@ def _router_node(state: AgentState, llm: Any) -> dict[str, Any]:
         route = "structural"
     elif "generation" in text:
         route = "generation"
+    elif "analysis" in text:
+        route = "analysis"
     else:
         route = "implementation"
     logger.info("agent[router] → route=%s", route)
@@ -206,6 +209,9 @@ def _retrieval_node(state: AgentState, service: KnowledgeService) -> dict[str, A
     elif route == "generation":
         search_query = query
         top_k = 8
+    elif route == "analysis":
+        search_query = f"suggestion design formula quality computation {query}"
+        top_k = 6
     else:
         search_query = query
         top_k = 6
@@ -377,6 +383,7 @@ def build_graph(
         {
             "implementation": "retrieval",  # pre-fetch vector context first
             "structural": "retrieval",  # broad retrieval + graph tools as supplement
+            "analysis": "retrieval",  # fetch code with formulas first
             "generation": "retrieval",  # fetch the code to document first
             "diagram": "retrieval",  # light structural context before generate_mermaid
             "direct": "reasoning",  # no retrieval needed
@@ -760,9 +767,7 @@ class CodebaseAgent:
             yield accumulated
 
         if not accumulated:
-            logger.warning(
-                "agent[astream] empty response, retrying with bare LLM query=%r", query
-            )
+            logger.warning("agent[astream] empty response, retrying with bare LLM query=%r", query)
             accumulated = await self._retry_bare_async()
             if accumulated:
                 yield accumulated

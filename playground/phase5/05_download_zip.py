@@ -29,15 +29,15 @@ import httpx
 # ──────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────
-BASE_URL   = "http://localhost:8000"
-REPO_ID    = "playground-full"
-API_KEY    = os.getenv("API_KEY", "")
+BASE_URL = "http://localhost:8000"
+REPO_ID = "playground-full"
+API_KEY = os.getenv("API_KEY", "")
 
 # Set JOB_ID to a known job_id, or leave empty to use the most recently saved doc
 JOB_ID: str = os.getenv("DOC_JOB_ID", "")
 
 headers = {"X-API-Key": API_KEY} if API_KEY else {}
-client  = httpx.Client(base_url=BASE_URL, headers=headers, timeout=60)
+client = httpx.Client(base_url=BASE_URL, headers=headers, timeout=60)
 
 # ──────────────────────────────────────────────
 # Resolve job_id if not provided
@@ -67,7 +67,7 @@ if resp.status_code != 200:
 
 content_disp = resp.headers.get("content-disposition", "")
 content_type = resp.headers.get("content-type", "")
-size_kb      = len(resp.content) / 1024
+size_kb = len(resp.content) / 1024
 print(f"Content-Type : {content_type}")
 print(f"Disposition  : {content_disp}")
 print(f"Size         : {size_kb:.1f} KB")
@@ -83,7 +83,7 @@ with zipfile.ZipFile(buf, "r") as zf:
     print()
 
     # Categorise
-    root_files   = [n for n in names if "/" not in n]
+    root_files = [n for n in names if "/" not in n]
     nested_files = [n for n in names if "/" in n]
 
     print("Root files:")

@@ -28,24 +28,48 @@ import httpx
 # Config
 # ──────────────────────────────────────────────
 BASE_URL = "http://localhost:8000"
-REPO_ID  = "playground-full"
-API_KEY  = os.getenv("API_KEY", "")
+REPO_ID = "playground-full"
+API_KEY = os.getenv("API_KEY", "")
 
 # Extensions to skip in the "filtered" run
-SKIP_MEDIA    = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
-                 ".mp4", ".mp3", ".wav", ".ogg", ".flac"]
-SKIP_COMPILED = [".pyc", ".pyo", ".pyd", ".class", ".jar", ".so", ".dll",
-                 ".exe", ".wasm", ".rlib"]
-SKIP_DATA     = [".csv", ".parquet", ".pkl", ".pickle", ".json", ".yaml",
-                 ".yml", ".xml", ".db", ".sqlite", ".npy", ".npz", ".log"]
+SKIP_MEDIA = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".webp",
+    ".mp4",
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",
+]
+SKIP_COMPILED = [".pyc", ".pyo", ".pyd", ".class", ".jar", ".so", ".dll", ".exe", ".wasm", ".rlib"]
+SKIP_DATA = [
+    ".csv",
+    ".parquet",
+    ".pkl",
+    ".pickle",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".db",
+    ".sqlite",
+    ".npy",
+    ".npz",
+    ".log",
+]
 SKIP_ARCHIVES = [".tar", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar"]
-SKIP_LOCKS    = [".lock"]
-SKIP_DOCS     = [".md", ".rst", ".txt"]
+SKIP_LOCKS = [".lock"]
+SKIP_DOCS = [".md", ".rst", ".txt"]
 
 ALL_SKIP = SKIP_MEDIA + SKIP_COMPILED + SKIP_DATA + SKIP_ARCHIVES + SKIP_LOCKS + SKIP_DOCS
 
 headers = {"X-API-Key": API_KEY} if API_KEY else {}
-client  = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
+client = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30)
 
 
 def submit_and_wait(label: str, exclude_extensions: list[str] | None) -> list[str]:
@@ -77,10 +101,10 @@ def submit_and_wait(label: str, exclude_extensions: list[str] | None) -> list[st
         if resp.status_code != 200:
             print(f"  Poll error: {resp.status_code}")
             return []
-        data   = resp.json()
+        data = resp.json()
         status = data.get("status")
-        done   = data.get("completed", 0)
-        total  = data.get("total", 0)
+        done = data.get("completed", 0)
+        total = data.get("total", 0)
         print(f"  {status:8}  {done}/{total if total else '?'}", end="\r")
         if status == "done":
             print()
@@ -94,7 +118,7 @@ def submit_and_wait(label: str, exclude_extensions: list[str] | None) -> list[st
     return []
 
 
-files_default  = submit_and_wait("No filter (backend defaults)", None)
+files_default = submit_and_wait("No filter (backend defaults)", None)
 files_filtered = submit_and_wait("Explicit filter (all presets)", ALL_SKIP)
 
 # ──────────────────────────────────────────────

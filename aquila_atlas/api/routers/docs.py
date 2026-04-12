@@ -85,7 +85,10 @@ DocStoreOrNone = Annotated[object, Depends(_get_doc_store)]
 
 
 def _sync_generate(record: DocJobRecord, svc: object) -> dict[str, str]:
-    from aquila_atlas.reasoning.docs_generator import GenerationCancelled, generate_docs  # noqa: PLC0415
+    from aquila_atlas.reasoning.docs_generator import (  # noqa: PLC0415
+        GenerationCancelled,
+        generate_docs,
+    )
 
     def progress(completed: int, total: int, current_target: str | None) -> None:
         if record.cancelled:

@@ -41,6 +41,7 @@ class GenerationCancelled(BaseException):
         super().__init__("Generation cancelled")
         self.partial: dict[str, str] = partial or {}
 
+
 # ---------------------------------------------------------------------------
 # Prompt loading
 # ---------------------------------------------------------------------------
@@ -167,48 +168,95 @@ def _search_context(svc: KnowledgeService, repo_id: str, query: str, top_k: int 
 # File filtering
 # ---------------------------------------------------------------------------
 
-_DEFAULT_SKIP_EXTENSIONS: frozenset[str] = frozenset({
-    # Images / media
-    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tiff",
-    ".mp4", ".mp3", ".wav", ".ogg", ".flac", ".avi", ".mov", ".mkv", ".webm",
-
-    # Documentation markup
-    ".md", ".rst", ".txt",
-
-    # Compiled / binary artefacts
-    ".pyc", ".pyo", ".pyd",
-    ".class", ".jar", ".war", ".ear",
-    ".o", ".obj", ".a", ".lib",
-    ".so", ".dll", ".dylib",
-    ".exe", ".out", ".bin", ".apk", ".app", ".wasm", ".rlib",
-
-    # Data blobs
-    ".csv", ".parquet", ".feather",
-    ".pkl", ".pickle",
-    ".json", ".yaml", ".yml", ".xml",
-    ".db", ".sqlite",
-    ".npy", ".npz",
-    ".log",
-
-    # Archives
-    ".tar", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar",
-
-    # Misc
-    ".lock",
-})
+_DEFAULT_SKIP_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Images / media
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".webp",
+        ".bmp",
+        ".tiff",
+        ".mp4",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".avi",
+        ".mov",
+        ".mkv",
+        ".webm",
+        # Documentation markup
+        ".md",
+        ".rst",
+        ".txt",
+        # Compiled / binary artefacts
+        ".pyc",
+        ".pyo",
+        ".pyd",
+        ".class",
+        ".jar",
+        ".war",
+        ".ear",
+        ".o",
+        ".obj",
+        ".a",
+        ".lib",
+        ".so",
+        ".dll",
+        ".dylib",
+        ".exe",
+        ".out",
+        ".bin",
+        ".apk",
+        ".app",
+        ".wasm",
+        ".rlib",
+        # Data blobs
+        ".csv",
+        ".parquet",
+        ".feather",
+        ".pkl",
+        ".pickle",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".db",
+        ".sqlite",
+        ".npy",
+        ".npz",
+        ".log",
+        # Archives
+        ".tar",
+        ".zip",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        # Misc
+        ".lock",
+    }
+)
 
 # Exact filenames always skipped regardless of exclude_extensions.
-_ALWAYS_SKIP_NAMES: frozenset[str] = frozenset({
-    "package-lock.json",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    ".gitignore",
-    ".gitattributes",
-    ".gitmodules",
-    ".editorconfig",
-    ".npmrc",
-    ".nvmrc",
-})
+_ALWAYS_SKIP_NAMES: frozenset[str] = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        ".gitignore",
+        ".gitattributes",
+        ".gitmodules",
+        ".editorconfig",
+        ".npmrc",
+        ".nvmrc",
+    }
+)
 
 
 def _list_files(
@@ -522,7 +570,9 @@ def _generate_per_module(
             result[f"{module}.md"] = content
             dependency_summaries[module] = _extract_summary(content)
     except GenerationCancelled:
-        logger.info("docs_generator: per_module cancelled — returning %d/%d modules", len(result), total)
+        logger.info(
+            "docs_generator: per_module cancelled — returning %d/%d modules", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
@@ -581,13 +631,17 @@ def _generate_per_file(
                 logger.warning("docs_generator: skipping file %r — LLM error: %s", file_path, exc)
                 content = f"# {file_path}\n\n> ⚠️ Documentation could not be generated for this file: `{exc}`\n"
             doc_path = file_path.replace("\\", "/")
-            stem, ext = doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+            stem, ext = (
+                doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+            )
             if ext and ext not in ("md", "txt", "rst"):
                 doc_path = stem + ".md"
             result[doc_path] = content
             dependency_summaries[file_path] = _extract_summary(content)
     except GenerationCancelled:
-        logger.info("docs_generator: per_file cancelled — returning %d/%d files", len(result), total)
+        logger.info(
+            "docs_generator: per_file cancelled — returning %d/%d files", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
@@ -643,7 +697,9 @@ def _generate_subsystems(
             content: str = out.content if hasattr(out, "content") else str(out)
             result[f"subsystems/{name.replace(chr(92), '/')}.md"] = content
     except GenerationCancelled:
-        logger.info("docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total)
+        logger.info(
+            "docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
@@ -662,7 +718,8 @@ def _generate_flows(
     entry_points = svc.get_entry_points(repo_id)
     if exclude_extensions:
         entry_points = [
-            ep for ep in entry_points
+            ep
+            for ep in entry_points
             if not any(ep["file_path"].lower().endswith(ext) for ext in exclude_extensions)
         ]
     if not entry_points:
@@ -758,8 +815,7 @@ def generate_docs(
         skip = None  # sentinel → _list_files uses _DEFAULT_SKIP_EXTENSIONS
     else:
         skip = frozenset(
-            (ext if ext.startswith(".") else f".{ext}").lower()
-            for ext in exclude_extensions
+            (ext if ext.startswith(".") else f".{ext}").lower() for ext in exclude_extensions
         )
 
     dispatch = {
@@ -776,7 +832,10 @@ def generate_docs(
 
     logger.info(
         "docs_generator: repo=%s scope=%s style=%s language=%s skip_exts=%s",
-        repo_id, scope, style, language,
+        repo_id,
+        scope,
+        style,
+        language,
         sorted(skip) if skip is not None else "(defaults)",
     )
     return generator(svc, repo_id, style, language, llm, progress_callback, skip)
