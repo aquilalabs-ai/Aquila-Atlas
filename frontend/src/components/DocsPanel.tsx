@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, DocContentResponse, DocLanguage, DocMetadata, DocScope, DocStyle } from '@/lib/api'
+import { MermaidBlock } from '@/components/MessageBubble'
 import { useDocGeneration } from '@/hooks/useDocGeneration'
 import { cn } from '@/lib/utils'
 import AQUILA_SVG_SYMBOL from '@/assets/images/aquila-text-small.svg?raw'
@@ -216,6 +217,10 @@ function buildHtmlPage(title: string, bodyHtml: string, htmlName: string): strin
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>${title}</title>
 ${CONTENT_CSS}
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'default' });
+<\/script>
 </head>
 <body>
 ${nav}
@@ -586,6 +591,19 @@ function DocResult({
         import('jszip'),
         import('marked'),
       ])
+
+      // Render mermaid fences as <div class="mermaid"> so Mermaid.js renders them
+      marked.use({
+        renderer: {
+          code({ text, lang }: { text: string; lang?: string }) {
+            if (lang === 'mermaid') {
+              return `<div class="mermaid">\n${text}\n</div>\n`
+            }
+            return false // fall through to default renderer
+          },
+        },
+      })
+
       const zip = new JSZip()
       const fileIndex: { htmlName: string; mdName: string }[] = []
 
@@ -794,27 +812,28 @@ function DocResult({
                   remarkPlugins={[remarkGfm]}
                   components={{
                     code({ className, children, ...props }) {
-                      const match = /language-(\w+)/.exec(className ?? '')
-                      const isBlock = !!match
-                      return isBlock ? (
+                      const lang = /language-(\w+)/.exec(className ?? '')?.[1] ?? ''
+                      const text = String(children).replace(/\n$/, '')
+                      const isBlock = !!className?.startsWith('language-') || text.includes('\n')
+                      if (!isBlock) {
+                        return <code className={className} {...props}>{children}</code>
+                      }
+                      if (lang === 'mermaid') {
+                        return <MermaidBlock chart={text} silent />
+                      }
+                      return (
                         <SyntaxHighlighter
                           style={oneDark}
-                          language={match[1]}
+                          language={lang}
                           PreTag="div"
-                          customStyle={{
-                            margin: 0,
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            lineHeight: '1.5',
-                          }}
+                          customStyle={{ margin: 0, borderRadius: '6px', fontSize: '12px', lineHeight: '1.5' }}
                         >
-                          {String(children).replace(/\n$/, '')}
+                          {text}
                         </SyntaxHighlighter>
-                      ) : (
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
                       )
+                    },
+                    pre({ children }) {
+                      return <>{children}</>
                     },
                   }}
                 >

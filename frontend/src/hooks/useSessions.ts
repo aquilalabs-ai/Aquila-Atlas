@@ -5,7 +5,8 @@ import type { SessionInfo } from '@/lib/api'
 import { useAppStore } from '@/store/app'
 
 export function useSessionList(repoId: string) {
-  const upsertSession = useAppStore((s) => s.upsertSession)
+  const upsertSession  = useAppStore((s) => s.upsertSession)
+  const removeSessions = useAppStore((s) => s.removeSessions)
 
   const query = useQuery({
     queryKey: ['sessions', repoId],
@@ -15,12 +16,20 @@ export function useSessionList(repoId: string) {
     staleTime: 10_000,
   })
 
-  // Merge server sessions into local store so they survive server restarts.
+  // Merge server sessions into local store and prune any stale local sessions
+  // that no longer exist on the server (e.g. expired / deleted from the DB).
   useEffect(() => {
-    if (query.data) {
-      query.data.sessions.forEach((s) => upsertSession(s))
-    }
-  }, [query.data, upsertSession])
+    if (!query.data) return
+
+    query.data.sessions.forEach((s) => upsertSession(s))
+
+    // Remove sessions for this repo that the server no longer knows about.
+    const serverIds = new Set(query.data.sessions.map((s) => s.session_id))
+    const staleIds = Object.values(useAppStore.getState().sessions)
+      .filter((s) => s.repo_id === repoId && !serverIds.has(s.session_id))
+      .map((s) => s.session_id)
+    if (staleIds.length > 0) removeSessions(staleIds)
+  }, [query.data, repoId, upsertSession, removeSessions])
 
   return query
 }

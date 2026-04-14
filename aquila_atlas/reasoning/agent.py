@@ -201,20 +201,20 @@ def _retrieval_node(state: AgentState, service: KnowledgeService) -> dict[str, A
     # Augment it so the vector search returns representative entry-point chunks.
     if route == "structural":
         search_query = f"main module entry point overview architecture {query}"
-        top_k = 10
+        top_k = 6
     elif route == "diagram":
         # Broad structural sweep: entry points, key classes, key files
         search_query = f"module class file structure entry point overview {query}"
-        top_k = 8
+        top_k = 5
     elif route == "generation":
         search_query = query
-        top_k = 8
+        top_k = 5
     elif route == "analysis":
         search_query = f"suggestion design formula quality computation {query}"
-        top_k = 6
+        top_k = 4
     else:
         search_query = query
-        top_k = 6
+        top_k = 4
 
     logger.info("agent[retrieval] repo=%s route=%s query=%r", repo_id, route, search_query)
 
@@ -368,7 +368,10 @@ def build_graph(
         return _retrieval_node(state, service)
 
     def reasoning_node(state: AgentState) -> dict[str, Any]:
-        return _reasoning_node(state, llm_with_tools)
+        # "direct" queries (greetings, rephrase requests) never call tools —
+        # use the bare LLM to avoid sending all tool schemas on every turn.
+        active_llm = llm if state.get("route") == "direct" else llm_with_tools
+        return _reasoning_node(state, active_llm)
 
     builder: StateGraph[AgentState] = StateGraph(AgentState)
     builder.add_node("router", router_node)

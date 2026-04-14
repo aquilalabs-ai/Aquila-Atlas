@@ -131,7 +131,7 @@ class SemanticSearchTool(BaseTool):
             )
         parts: list[str] = []
         for i, r in enumerate(results, 1):
-            preview = r.content[:500] + ("..." if len(r.content) > 500 else "")
+            preview = r.content[:400] + ("..." if len(r.content) > 400 else "")
             parts.append(
                 f"[{i}] {r.file_path}:{r.start_line}-{r.end_line} "
                 f"({r.chunk_type}) score={r.score:.4f}\n"
@@ -160,11 +160,13 @@ class FileReaderTool(BaseTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    _MAX_OUTPUT_CHARS: int = 6000
+
     def _run(self, file_path: str, repo_id: str) -> str:
         logger.debug("tool=file_reader repo=%s path=%r", repo_id, file_path)
         svc = cast("KnowledgeService", self.service)
         # Use the file path as the query so BM25 matches token overlap
-        results = svc.search(query=file_path, repo_id=repo_id, top_k=50, file_path=file_path)
+        results = svc.search(query=file_path, repo_id=repo_id, top_k=20, file_path=file_path)
         if not results:
             return f"No content found for: {file_path}"
 
@@ -181,7 +183,11 @@ class FileReaderTool(BaseTool):
         sections = [
             f"# Lines {c.start_line}-{c.end_line} [{c.chunk_type}]\n{c.content}" for c in chunks
         ]
-        return header + "\n\n---\n\n".join(sections)
+        body = "\n\n---\n\n".join(sections)
+        result = header + body
+        if len(result) > self._MAX_OUTPUT_CHARS:
+            result = result[: self._MAX_OUTPUT_CHARS] + f"\n\n[truncated — {len(chunks)} chunks total, showing first {self._MAX_OUTPUT_CHARS} chars]"
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +417,7 @@ class MermaidGeneratorTool(BaseTool):
         from aquila_atlas.config import get_settings  # noqa: PLC0415
         from aquila_atlas.reasoning.mermaid import (  # noqa: PLC0415
             extract_mermaid_block,
-            validate_with_mermaid_py,
+            validate_with_node,
             wrap_in_fence,
         )
 
@@ -461,10 +467,10 @@ class MermaidGeneratorTool(BaseTool):
             {"role": "user", "content": initial_prompt},
         ]
 
-        # ── 3. LLM generate → mermaid-py validate → feedback loop ─────────
-        # The LLM generates the diagram. If mermaid-py (or the Python
-        # fallback validator) finds errors, the errors are added to the
-        # conversation and the LLM tries again.  Repeat up to MAX_ATTEMPTS.
+        # ── 3. LLM generate → Node validate → feedback loop ──────────────
+        # The LLM generates the diagram. If the Node.js mermaid.parse()
+        # finds errors, they are added to the conversation and the LLM tries
+        # again.  Repeat up to MAX_ATTEMPTS.
         diagram = ""
         last_errors: list[str] = []
 
@@ -477,7 +483,7 @@ class MermaidGeneratorTool(BaseTool):
             raw = response.choices[0].message.content or ""
             diagram = extract_mermaid_block(raw)
 
-            errors = validate_with_mermaid_py(diagram)
+            errors = validate_with_node(diagram)
             if not errors:
                 logger.info("tool=generate_mermaid valid after %d attempt(s)", attempt)
                 return wrap_in_fence(diagram)
@@ -543,12 +549,338 @@ class ValidateMermaidTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _run(self, diagram: str, repo_id: str) -> str:  # noqa: ARG002
-        from aquila_atlas.reasoning.mermaid import validate_mermaid  # noqa: PLC0415
+        from aquila_atlas.reasoning.mermaid import validate_with_node  # noqa: PLC0415
 
-        errors = validate_mermaid(diagram)
+        errors = validate_with_node(diagram)
         if not errors:
             return "valid"
         return "Syntax errors found:\n" + "\n".join(f"- {e}" for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# ListLibsTool
+# ---------------------------------------------------------------------------
+
+
+class ListLibsInput(BaseModel):
+    repo_id: str = Field(description="Repository ID to inspect")
+
+
+class ListLibsTool(BaseTool):
+    """List all external libraries and packages imported by the codebase.
+
+    Scans graph IMPORTS edges and vector-stored import metadata to surface
+    every third-party dependency referenced in the repo — useful for
+    understanding the technology stack and dependency surface.
+    """
+
+    name: str = "list_libs"
+    description: str = (
+        "List all external libraries and packages imported across the codebase. "
+        "Use this to understand the technology stack or when asked about dependencies, "
+        "requirements, or what libraries the project uses."
+    )
+    args_schema: type[BaseModel] = ListLibsInput
+    service: Any  # KnowledgeService
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _run(self, repo_id: str) -> str:
+        logger.debug("tool=list_libs repo=%s", repo_id)
+        svc = cast("KnowledgeService", self.service)
+
+        # Pull import info from graph (IMPORTS edges on File nodes store raw import strings)
+        try:
+            rows = svc.graph.cypher_read(
+                """
+                MATCH (f:File {repo_id: $repo_id})
+                WHERE f.imports IS NOT NULL AND size(f.imports) > 0
+                RETURN f.file_path AS file_path, f.imports AS imports, f.language AS language
+                ORDER BY f.file_path
+                """,
+                params={"repo_id": repo_id},
+            )
+        except Exception as exc:
+            logger.warning("tool=list_libs cypher failed: %s", exc)
+            rows = []
+
+        if not rows:
+            # Fallback: search vector store for import statements
+            results = svc.search(
+                query="import require from library dependency",
+                repo_id=repo_id,
+                top_k=20,
+                chunk_type="file",
+            )
+            if not results:
+                return f"No import data found for repo '{repo_id}'."
+            lines = [f"- {r.file_path}: {r.content[:200]}" for r in results]
+            return "Imports found (from vector search):\n" + "\n".join(lines)
+
+        # Aggregate imports across all files, classify external vs internal
+        external: dict[str, list[str]] = {}
+        for row in rows:
+            fp = str(row.get("file_path", ""))
+            imports = row.get("imports") or []
+            lang = str(row.get("language", "unknown"))
+            if isinstance(imports, str):
+                imports = [imports]
+            for imp in imports:
+                imp = str(imp).strip()
+                if not imp:
+                    continue
+                # Heuristic: internal imports contain the repo path separator or relative dot
+                is_internal = imp.startswith(".") or "/" in imp or "\\" in imp
+                if not is_internal:
+                    external.setdefault(imp, []).append(f"{fp} [{lang}]")
+
+        if not external:
+            return (
+                f"No external library imports detected for repo '{repo_id}'. "
+                "All imports appear to be internal (relative) paths."
+            )
+
+        sorted_libs = sorted(external.items(), key=lambda x: (-len(x[1]), x[0]))
+        parts = [f"External libraries used in '{repo_id}' ({len(sorted_libs)} unique):\n"]
+        for lib, usages in sorted_libs[:60]:
+            usage_count = len(usages)
+            sample_files = ", ".join(usages[:3])
+            suffix = f" (and {usage_count - 3} more)" if usage_count > 3 else ""
+            parts.append(f"  • {lib} — used in {sample_files}{suffix}")
+        if len(sorted_libs) > 60:
+            parts.append(f"  … and {len(sorted_libs) - 60} more libraries")
+        return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# FindCallersTool
+# ---------------------------------------------------------------------------
+
+
+class FindCallersInput(BaseModel):
+    target: str = Field(
+        description=(
+            "Name of the function, method, or class to find callers for. "
+            "Use the qualified name (e.g. 'VectorStore.search') or just the function name."
+        )
+    )
+    repo_id: str = Field(description="Repository ID")
+
+
+class FindCallersTool(BaseTool):
+    """Find all callers of a given function, method, or class via graph traversal."""
+
+    name: str = "find_callers"
+    description: str = (
+        "Find everything that calls a specific function, method, or class. "
+        "Use this to understand the call graph, trace usages, or assess the impact of changing a component. "
+        "Returns callers with their file locations."
+    )
+    args_schema: type[BaseModel] = FindCallersInput
+    service: Any  # KnowledgeService
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _run(self, target: str, repo_id: str) -> str:
+        logger.debug("tool=find_callers repo=%s target=%r", repo_id, target)
+        svc = cast("KnowledgeService", self.service)
+
+        try:
+            rows = svc.graph.cypher_read(
+                """
+                MATCH (caller)-[:CALLS]->(callee)
+                WHERE callee.repo_id = $repo_id
+                  AND (callee.name = $target OR callee.qualified_name CONTAINS $target)
+                RETURN caller.qualified_name AS caller_name,
+                       caller.file_path     AS caller_file,
+                       callee.qualified_name AS callee_name,
+                       callee.file_path     AS callee_file,
+                       labels(caller)[0]   AS caller_kind
+                ORDER BY caller_file, caller_name
+                LIMIT 50
+                """,
+                params={"repo_id": repo_id, "target": target},
+            )
+        except Exception as exc:
+            logger.warning("tool=find_callers cypher failed: %s", exc)
+            rows = []
+
+        if not rows:
+            # Fallback: semantic search for usages
+            results = svc.search(
+                query=f"usage call {target}",
+                repo_id=repo_id,
+                top_k=8,
+            )
+            if not results:
+                return f"No callers found for '{target}' in repo '{repo_id}'."
+            parts = [f"No direct graph edges found. Semantic matches for '{target}' usages:\n"]
+            for r in results:
+                parts.append(f"  • {r.file_path}:{r.start_line} — {r.qualified_name}")
+            return "\n".join(parts)
+
+        callee_name = str(rows[0].get("callee_name", target))
+        callee_file = str(rows[0].get("callee_file", ""))
+        parts = [
+            f"Callers of `{callee_name}` (in `{callee_file}`): {len(rows)} found\n"
+        ]
+        for row in rows:
+            kind = str(row.get("caller_kind", "?")).lower()
+            parts.append(
+                f"  • [{kind}] {row.get('caller_name', '?')} "
+                f"in {row.get('caller_file', '?')}"
+            )
+        return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# ListEntryPointsTool
+# ---------------------------------------------------------------------------
+
+
+class ListEntryPointsInput(BaseModel):
+    repo_id: str = Field(description="Repository ID")
+
+
+class ListEntryPointsTool(BaseTool):
+    """List all public entry-point functions that have no incoming callers."""
+
+    name: str = "list_entry_points"
+    description: str = (
+        "List all public functions and methods that are entry points — i.e. they are "
+        "not called by any other code in the repository. These are the starting points "
+        "of execution flows. Use this to understand how the application is invoked."
+    )
+    args_schema: type[BaseModel] = ListEntryPointsInput
+    service: Any  # KnowledgeService
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _run(self, repo_id: str) -> str:
+        logger.debug("tool=list_entry_points repo=%s", repo_id)
+        svc = cast("KnowledgeService", self.service)
+        entry_points = svc.get_entry_points(repo_id)
+
+        if not entry_points:
+            return (
+                f"No entry points found for repo '{repo_id}'. "
+                "Either the repo has no public functions, or CALLS edges were not created "
+                "(check that the language parser extracts call relationships)."
+            )
+
+        by_file: dict[str, list[dict[str, Any]]] = {}
+        for ep in entry_points:
+            fp = str(ep.get("file_path", "unknown"))
+            by_file.setdefault(fp, []).append(ep)
+
+        parts = [f"Entry points in '{repo_id}': {len(entry_points)} total\n"]
+        for fp in sorted(by_file):
+            parts.append(f"  {fp}:")
+            for ep in by_file[fp]:
+                kind = str(ep.get("kind", "function")).lower()
+                score = ep.get("out_degree")
+                score_hint = f" (calls {score} others)" if score else ""
+                parts.append(f"    • [{kind}] {ep.get('name', '?')}{score_hint}")
+        return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# CallChainTool
+# ---------------------------------------------------------------------------
+
+
+class CallChainInput(BaseModel):
+    start_function: str = Field(
+        description=(
+            "Qualified name or partial name of the starting function, "
+            "e.g. 'VectorStore.search' or 'run_ingestion'."
+        )
+    )
+    repo_id: str = Field(description="Repository ID")
+    max_depth: int = Field(
+        default=5,
+        description="Maximum call-chain depth to trace (1-8). Default 5.",
+    )
+
+
+class CallChainTool(BaseTool):
+    """Trace the call chain (call tree) starting from a given function.
+
+    Performs BFS over CALLS edges in the graph up to *max_depth* hops,
+    returning every reachable callee with its depth and file location.
+    Useful for understanding execution flows, data pipelines, and side effects.
+    """
+
+    name: str = "call_chain"
+    description: str = (
+        "Trace the execution call chain starting from a function. "
+        "Shows every function called directly or transitively from the starting point, "
+        "up to the specified depth. Use for understanding flow, pipelines, and side effects."
+    )
+    args_schema: type[BaseModel] = CallChainInput
+    service: Any  # KnowledgeService
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _run(self, start_function: str, repo_id: str, max_depth: int = 5) -> str:
+        logger.debug(
+            "tool=call_chain repo=%s start=%r depth=%d", repo_id, start_function, max_depth
+        )
+        svc = cast("KnowledgeService", self.service)
+        max_depth = max(1, min(max_depth, 8))
+
+        # Resolve start_id — find a matching node first
+        try:
+            candidates = svc.graph.cypher_read(
+                """
+                MATCH (fn {repo_id: $repo_id})
+                WHERE (fn:Function OR fn:Method)
+                  AND (fn.name = $name OR fn.qualified_name CONTAINS $name)
+                RETURN fn.id AS id, fn.qualified_name AS qn, fn.file_path AS fp
+                LIMIT 5
+                """,
+                params={"repo_id": repo_id, "name": start_function},
+            )
+        except Exception as exc:
+            logger.warning("tool=call_chain candidate lookup failed: %s", exc)
+            candidates = []
+
+        if not candidates:
+            return (
+                f"Function '{start_function}' not found in repo '{repo_id}'. "
+                "Try the exact qualified name (e.g. 'ClassName.method_name')."
+            )
+
+        # Pick the best match (prefer exact name match)
+        start = candidates[0]
+        for c in candidates:
+            if str(c.get("qn", "")).split("::")[-1] == start_function:
+                start = c
+                break
+
+        start_id = str(start["id"])
+        start_qn = str(start["qn"])
+        start_fp = str(start["fp"])
+
+        chain = svc.get_call_chain(repo_id, start_id, max_depth=max_depth)
+        if not chain:
+            return (
+                f"`{start_qn}` ({start_fp}) has no outgoing calls recorded in the graph.\n"
+                "Either the function makes no calls, or call relationships were not extracted "
+                "for this language."
+            )
+
+        parts = [
+            f"Call chain from `{start_qn}` (depth ≤{max_depth}):\n",
+            f"  depth 0  →  {start_qn}  [{start_fp}]",
+        ]
+        for step in chain:
+            indent = "  " + "  " * int(step.get("depth", 1))
+            parts.append(
+                f"{indent}depth {step['depth']}  →  {step['name']}  [{step.get('file_path', '?')}]"
+            )
+        parts.append(f"\nTotal reachable callees: {len(chain)}")
+        return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -570,25 +902,20 @@ class _McpCypherWrapper(BaseTool):
 
     args_schema: type[BaseModel] = _CypherInput
     mcp_tool: Any = Field(exclude=True)  # original MCP BaseTool
-    get_schema_tool: Any = Field(default=None, exclude=True)  # optional get-schema tool
+    get_schema_tool: Any = Field(default=None, exclude=True)  # unused, kept for compat
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    async def _arun(self, query: str) -> str:
-        # Smart approach: for read-cypher queries, first get schema context
-        # to help with query understanding and result interpretation
-        if self.mcp_tool.name == "read-cypher" and self.get_schema_tool:
-            logger.debug("tool=read-cypher: calling get-schema first for context")
-            try:
-                schema_result = await self.get_schema_tool.ainvoke({})
-                logger.debug("tool=read-cypher: schema retrieved (%d chars)", len(schema_result))
-                # We don't return the schema, just ensure it's called for context
-                # The agent will have this information available through the tool call history
-            except Exception as e:
-                logger.warning("tool=read-cypher: failed to get schema: %s", e)
-                # Continue with the query even if schema fails
+    _MAX_OUTPUT_CHARS: int = 4000
 
-        return str(await self.mcp_tool.ainvoke({"query": query}))
+    async def _arun(self, query: str) -> str:
+        result = str(await self.mcp_tool.ainvoke({"query": query}))
+        if len(result) > self._MAX_OUTPUT_CHARS:
+            result = (
+                result[: self._MAX_OUTPUT_CHARS]
+                + f"\n[truncated — {len(result)} chars total]"
+            )
+        return result
 
     def _run(self, query: str) -> str:
         raise NotImplementedError("Use async invocation (_arun)")
@@ -698,4 +1025,9 @@ def get_tools(
         DocGenerationTool(service=service, llm=llm),
         MermaidGeneratorTool(service=service, llm=llm),
         ValidateMermaidTool(),
+        # Graph-traversal tools — expose Neo4j relationships without raw Cypher
+        ListLibsTool(service=service),
+        FindCallersTool(service=service),
+        ListEntryPointsTool(service=service),
+        CallChainTool(service=service),
     ]

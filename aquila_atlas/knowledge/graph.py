@@ -619,7 +619,19 @@ class GraphStore:
             }
 
     def get_entry_points(self, repo_id: str) -> list[dict[str, Any]]:
-        """Return public functions/methods with no incoming CALLS edges (entry points)."""
+        """Return public entry-point functions ranked by significance.
+
+        Entry points are public functions/methods with no incoming CALLS edges.
+        Each record includes:
+        - ``name``        — qualified name
+        - ``file_path``   — source file
+        - ``kind``        — 'Function' or 'Method'
+        - ``out_degree``  — number of direct callees (higher = more orchestration)
+
+        Results are returned ordered by descending out_degree so the most
+        important orchestrators appear first.  The caller (docs generator,
+        ListEntryPointsTool) may apply further scoring and capping.
+        """
         with self._driver.session() as session:
             result = session.run(
                 """
@@ -627,10 +639,14 @@ class GraphStore:
                 WHERE (fn:Function OR fn:Method)
                   AND fn.visibility = 'public'
                   AND NOT EXISTS { MATCH ()-[:CALLS]->(fn) }
-                RETURN fn.qualified_name AS name, fn.file_path AS file_path,
-                       labels(fn)[0] AS kind
-                ORDER BY fn.file_path, fn.qualified_name
-                LIMIT 30
+                OPTIONAL MATCH (fn)-[:CALLS]->(callee {repo_id: $repo_id})
+                WITH fn, count(callee) AS out_degree
+                RETURN fn.qualified_name AS name,
+                       fn.file_path     AS file_path,
+                       labels(fn)[0]    AS kind,
+                       out_degree
+                ORDER BY out_degree DESC, fn.file_path, fn.qualified_name
+                LIMIT 150
                 """,
                 repo_id=repo_id,
             )

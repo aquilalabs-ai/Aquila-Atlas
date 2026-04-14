@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mermaid-js/mermaid-cli": "^11.12.0",
     "@monaco-editor/react": "^4.6.0",
     "@tanstack/react-query": "^5.68.0",
     "clsx": "^2.1.1",
