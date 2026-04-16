@@ -55,6 +55,10 @@ _TOOL_STATUS: dict[str, str] = {
     "get-schema": "Reading graph schema...",
     "read-cypher": "Querying graph...",
     "write-cypher": "Writing to graph...",
+    "git_log": "Reading git history...",
+    "git_status": "Checking git status...",
+    "git_diff": "Computing git diff...",
+    "git_blame": "Running git blame...",
 }
 
 if TYPE_CHECKING:
@@ -368,9 +372,16 @@ def build_graph(
         return _retrieval_node(state, service)
 
     def reasoning_node(state: AgentState) -> dict[str, Any]:
-        # "direct" queries (greetings, rephrase requests) never call tools —
-        # use the bare LLM to avoid sending all tool schemas on every turn.
-        active_llm = llm if state.get("route") == "direct" else llm_with_tools
+        from langchain_core.messages import ToolMessage  # noqa: PLC0415
+
+        tool_call_count = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
+        # Hard-stop: after 5 tool results, switch to bare LLM so tools_condition
+        # sees no tool_calls and exits the graph immediately.  This prevents the
+        # recursion limit from being reached on broad structural questions.
+        if state.get("route") == "direct" or tool_call_count >= 5:
+            active_llm = llm
+        else:
+            active_llm = llm_with_tools
         return _reasoning_node(state, active_llm)
 
     builder: StateGraph[AgentState] = StateGraph(AgentState)

@@ -6,7 +6,7 @@
  *   Saved    — list of persisted docs (with delete)
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -493,6 +493,80 @@ function FileTreeNode({
 }
 
 // ---------------------------------------------------------------------------
+// PollingProgress — owns its own 1-second timer so only this subtree re-renders
+// ---------------------------------------------------------------------------
+
+function PollingProgress({
+  startedAt,
+  total,
+  completed,
+  currentTarget,
+  jobId,
+  onCancel,
+}: {
+  startedAt: number
+  total: number
+  completed: number
+  currentTarget: string | undefined
+  jobId: string
+  onCancel: (jobId: string) => Promise<void>
+}) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const elapsed = Math.floor((now - startedAt) / 1000)
+  const elapsedStr = elapsed < 60
+    ? `${elapsed}s`
+    : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+
+  let etaStr: string | null = null
+  if (total > 0 && completed > 0 && completed < total) {
+    const rate = elapsed / completed
+    const remaining = Math.round(rate * (total - completed))
+    etaStr = remaining < 60
+      ? `~${remaining}s left`
+      : `~${Math.floor(remaining / 60)}m ${remaining % 60}s left`
+  }
+
+  return (
+    <div className="mb-6 space-y-3">
+      <div className="flex items-center justify-between text-xs text-fg-muted">
+        <span>Generating documentation…</span>
+        <span className="flex items-center gap-2">
+          {total > 0 && <span>{completed}/{total}</span>}
+          <span className="text-fg-subtle">{elapsedStr}</span>
+          {etaStr && <span className="text-fg-subtle">{etaStr}</span>}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-canvas-subtle">
+        <div
+          className="h-full rounded-full bg-accent-emphasis transition-all duration-500"
+          style={{ width: total > 0 ? `${Math.round((completed / total) * 100)}%` : '10%' }}
+        />
+      </div>
+      {currentTarget && (
+        <p className="text-[11px] text-fg-subtle truncate">
+          Processing: <span className="font-mono">{currentTarget}</span>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => void onCancel(jobId)}
+        className="mt-1 flex items-center gap-1.5 rounded-md border border-danger-emphasis/40 px-2.5 py-1 text-xs text-danger-fg transition-colors hover:bg-danger-subtle"
+      >
+        <X className="h-3 w-3" />
+        Cancel generation
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // DocResult — file browser + content viewer (done state)
 // ---------------------------------------------------------------------------
 
@@ -513,8 +587,8 @@ function DocResult({
   language: string
   onBack: () => void
 }) {
-  const tree = buildFileTree(files)
-  const firstFile = Object.keys(files).sort()[0] ?? ''
+  const tree = useMemo(() => buildFileTree(files), [files])
+  const firstFile = useMemo(() => Object.keys(files).sort()[0] ?? '', [files])
   const [selectedFile, setSelectedFile] = useState(firstFile)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     new Set(getAncestorPaths(firstFile)),
@@ -548,22 +622,22 @@ function DocResult({
 
   const isSearching = searchQuery.trim().length > 0
 
-  function handleSelectFile(path: string) {
+  const handleSelectFile = useCallback((path: string) => {
     setSelectedFile(path)
     setExpandedFolders((prev) => new Set([...prev, ...getAncestorPaths(path)]))
-  }
+  }, [])
 
-  function handleToggleFolder(path: string) {
+  const handleToggleFolder = useCallback((path: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev)
       next.has(path) ? next.delete(path) : next.add(path)
       return next
     })
-  }
+  }, [])
 
-  function handleSelectSearchMatch(match: SearchMatch) {
+  const handleSelectSearchMatch = useCallback((match: SearchMatch) => {
     handleSelectFile(match.file)
-  }
+  }, [handleSelectFile])
 
   async function handleCopy() {
     const content = files[selectedFile] ?? ''
@@ -634,6 +708,53 @@ function DocResult({
     }
   }
 
+  async function handleDownloadPdf() {
+    setShowExportMenu(false)
+    const toastId = toast.loading('Generating PDF…')
+    try {
+      const blob = await api.downloadDocPdf(repoId, jobId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${repoId}-docs-${scope}-${language}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+      toast.success('PDF downloaded', { id: toastId })
+    } catch (e) {
+      console.error('PDF export error:', e)
+      toast.error('PDF export failed', { id: toastId })
+    }
+  }
+
+  const mdComponents = useMemo(() => ({
+    code({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) {
+      const lang = /language-(\w+)/.exec(className ?? '')?.[1] ?? ''
+      const text = String(children).replace(/\n$/, '')
+      const isBlock = !!className?.startsWith('language-') || text.includes('\n')
+      if (!isBlock) {
+        return <code className={className} {...props}>{children}</code>
+      }
+      if (lang === 'mermaid') {
+        return <MermaidBlock chart={text} silent />
+      }
+      return (
+        <SyntaxHighlighter
+          style={oneDark}
+          language={lang}
+          PreTag="div"
+          customStyle={{ margin: 0, borderRadius: '6px', fontSize: '12px', lineHeight: '1.5' }}
+        >
+          {text}
+        </SyntaxHighlighter>
+      )
+    },
+    pre({ children }: React.ComponentPropsWithoutRef<'pre'>) {
+      return <>{children}</>
+    },
+  }), [])
+
   const fileCount = Object.keys(files).length
 
   // Count matches in current file for indicator
@@ -698,6 +819,13 @@ function DocResult({
               >
                 <Download className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
                 <span>Download as HTML</span>
+              </button>
+              <button
+                onClick={() => void handleDownloadPdf()}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-fg-default transition-colors hover:bg-canvas-subtle"
+              >
+                <Download className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
+                <span>Download as PDF</span>
               </button>
             </div>
           )}
@@ -810,32 +938,7 @@ function DocResult({
               <div className="prose-github max-w-3xl">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
-                  components={{
-                    code({ className, children, ...props }) {
-                      const lang = /language-(\w+)/.exec(className ?? '')?.[1] ?? ''
-                      const text = String(children).replace(/\n$/, '')
-                      const isBlock = !!className?.startsWith('language-') || text.includes('\n')
-                      if (!isBlock) {
-                        return <code className={className} {...props}>{children}</code>
-                      }
-                      if (lang === 'mermaid') {
-                        return <MermaidBlock chart={text} silent />
-                      }
-                      return (
-                        <SyntaxHighlighter
-                          style={oneDark}
-                          language={lang}
-                          PreTag="div"
-                          customStyle={{ margin: 0, borderRadius: '6px', fontSize: '12px', lineHeight: '1.5' }}
-                        >
-                          {text}
-                        </SyntaxHighlighter>
-                      )
-                    },
-                    pre({ children }) {
-                      return <>{children}</>
-                    },
-                  }}
+                  components={mdComponents}
                 >
                   {files[selectedFile]}
                 </ReactMarkdown>
@@ -1061,14 +1164,6 @@ export function DocsPanel({ repoId }: { repoId: string }) {
   const [language, setLanguage] = useState<DocLanguage>('en')
   const [skipPresets, setSkipPresets] = useState<Set<SkipPresetId>>(new Set(ALL_PRESET_IDS))
 
-  // Tick every second while polling so the elapsed / ETA display updates live
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (state.phase !== 'polling') return
-    setNow(Date.now())  // sync immediately so elapsed is correct on resume
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [state.phase])
 
   function togglePreset(id: SkipPresetId) {
     setSkipPresets((prev) => {
@@ -1141,60 +1236,16 @@ export function DocsPanel({ repoId }: { repoId: string }) {
       {activeTab === 'generate' && (
         <div className="flex-1 overflow-y-auto p-4">
           {/* Polling progress */}
-          {state.phase === 'polling' && (() => {
-            const elapsed = Math.floor((now - state.startedAt) / 1000)
-            const elapsedStr = elapsed < 60
-              ? `${elapsed}s`
-              : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
-
-            // ETA: only meaningful once we have completed ≥ 1 and know total
-            let etaStr: string | null = null
-            if (state.total > 0 && state.completed > 0 && state.completed < state.total) {
-              const rate = elapsed / state.completed          // s per item
-              const remaining = Math.round(rate * (state.total - state.completed))
-              etaStr = remaining < 60
-                ? `~${remaining}s left`
-                : `~${Math.floor(remaining / 60)}m ${remaining % 60}s left`
-            }
-
-            return (
-              <div className="mb-6 space-y-3">
-                <div className="flex items-center justify-between text-xs text-fg-muted">
-                  <span>Generating documentation…</span>
-                  <span className="flex items-center gap-2">
-                    {state.total > 0 && (
-                      <span>{state.completed}/{state.total}</span>
-                    )}
-                    <span className="text-fg-subtle">{elapsedStr}</span>
-                    {etaStr && <span className="text-fg-subtle">{etaStr}</span>}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-canvas-subtle">
-                  <div
-                    className="h-full rounded-full bg-accent-emphasis transition-all duration-500"
-                    style={{
-                      width: state.total > 0
-                        ? `${Math.round((state.completed / state.total) * 100)}%`
-                        : '10%',
-                    }}
-                  />
-                </div>
-                {state.currentTarget && (
-                  <p className="text-[11px] text-fg-subtle truncate">
-                    Processing: <span className="font-mono">{state.currentTarget}</span>
-                  </p>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void cancel(state.jobId)}
-                  className="mt-1 flex items-center gap-1.5 rounded-md border border-danger-emphasis/40 px-2.5 py-1 text-xs text-danger-fg transition-colors hover:bg-danger-subtle"
-                >
-                  <X className="h-3 w-3" />
-                  Cancel generation
-                </button>
-              </div>
-            )
-          })()}
+          {state.phase === 'polling' && (
+            <PollingProgress
+              startedAt={state.startedAt}
+              total={state.total}
+              completed={state.completed}
+              currentTarget={state.currentTarget ?? undefined}
+              jobId={state.jobId}
+              onCancel={cancel}
+            />
+          )}
 
           {/* Error */}
           {state.phase === 'error' && (

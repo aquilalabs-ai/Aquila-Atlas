@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, useMemo } from 'react'
+import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -293,7 +293,7 @@ interface Props {
   onRegenerate?: () => void
 }
 
-export function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) {
+export const MessageBubble = memo(function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) {
   const isUser = message.role === 'user'
 
   const components = useMemo<Components>(() => ({
@@ -388,4 +388,4 @@ export function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) 
       </div>
     </div>
   )
-}
+})

@@ -15,9 +15,12 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import shutil
+import subprocess
 import uuid
 import zipfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -65,6 +68,24 @@ class DocJobRecord:
 
 
 _doc_jobs: dict[str, DocJobRecord] = {}
+
+_SCOPE_LABELS: dict[str, str] = {
+    "architecture": "Architecture",
+    "per_module":   "Per Module",
+    "per_file":     "Per File",
+    "subsystem":    "Subsystem",
+    "flows":        "Flows",
+}
+_STYLE_LABELS: dict[str, str] = {
+    "technical":  "Technical",
+    "functional": "Functional",
+}
+_LANG_LABELS: dict[str, str] = {
+    "en": "EN", "fr": "FR", "es": "ES", "de": "DE",
+    "zh": "ZH", "ja": "JA", "pt": "PT", "ar": "AR",
+}
+
+_PDF_SCRIPT = Path(__file__).parent.parent.parent.parent / "frontend" / "scripts" / "generate-pdf.cjs"
 
 
 # ---------------------------------------------------------------------------
@@ -134,16 +155,40 @@ async def _run_doc_job(job_id: str, svc: object, doc_store: object) -> None:
     if record is None:
         return
     record.status = "running"
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         files = await loop.run_in_executor(None, _sync_generate, record, svc)
         record.files = files
         record.status = "done"
         _persist_doc(record, doc_store)
+        record.files = {}  # free bulk content; metadata kept for polling
     except Exception as exc:
         logger.exception("Doc job %s failed", job_id)
         record.status = "failed"
         record.error = str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_doc_files(
+    job_id: str, repo_id: str, request: Request
+) -> tuple[dict[str, str], "DocJobRecord | None"]:
+    """Return (files, record) from memory or DB; files is empty if not found/ready."""
+    record = _doc_jobs.get(job_id)
+    if record is not None and record.repo_id == repo_id and record.status == "done":
+        return record.files, record
+    doc_store = getattr(request.app.state, "doc_store", None)
+    if doc_store is not None:
+        from aquila_atlas.api.store import DocStore  # noqa: PLC0415
+
+        if isinstance(doc_store, DocStore):
+            row = doc_store.load_doc(job_id)
+            if row is not None and row["repo_id"] == repo_id:
+                return row["files"], None
+    return {}, None
 
 
 # ---------------------------------------------------------------------------
@@ -292,37 +337,108 @@ async def download_doc_zip(
     request: Request,
     _auth: Auth,
 ) -> StreamingResponse:
-    # Resolve files from memory or DB
-    files: dict[str, str] = {}
-    record = _doc_jobs.get(job_id)
-    if record is not None and record.repo_id == repo_id and record.status == "done":
-        files = record.files
-    else:
-        doc_store = getattr(request.app.state, "doc_store", None)
-        if doc_store is not None:
-            from aquila_atlas.api.store import DocStore  # noqa: PLC0415
-
-            if isinstance(doc_store, DocStore):
-                row = doc_store.load_doc(job_id)
-                if row is not None and row["repo_id"] == repo_id:
-                    files = row["files"]
-
+    files, record = _resolve_doc_files(job_id, repo_id, request)
     if not files:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Documentation not found or not ready"
         )
 
+    scope = record.scope if record else "docs"
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for filename, content in files.items():
-            zf.writestr(filename, content)
+        for fname, content in files.items():
+            zf.writestr(fname, content)
     buf.seek(0)
 
-    scope = record.scope if record else "docs"
     filename = f"{repo_id}-docs-{scope}.zip"
     return StreamingResponse(
         buf,
         media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/docs/{job_id}/download-pdf",
+    summary="Download documentation as a PDF",
+)
+async def download_doc_pdf(
+    repo_id: str,
+    job_id: str,
+    request: Request,
+    _auth: Auth,
+) -> StreamingResponse:
+    files, record = _resolve_doc_files(job_id, repo_id, request)
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Documentation not found or not ready",
+        )
+
+    scope = record.scope if record else "docs"
+    style = record.style if record else "technical"
+    language = record.language if record else "en"
+
+    scope_label = _SCOPE_LABELS.get(scope, scope.title())
+    style_label = _STYLE_LABELS.get(style, style.title())
+    lang_label  = _LANG_LABELS.get(language, language.upper())
+
+    title_block = (
+        f"# Documentation: {scope_label} — {lang_label} — {style_label}\n\n"
+        f"**Repository:** `{repo_id}`\n\n"
+        f"---"
+    )
+
+    parts: list[str] = [title_block]
+    for filename, content in files.items():
+        parts.append(f"## `{filename}`\n\n{content}")
+    combined = "\n\n---\n\n".join(parts)
+
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Node.js not found — required for PDF generation",
+        )
+    if not _PDF_SCRIPT.exists():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PDF generation script not found — run `npm install` in the frontend directory",
+        )
+
+    loop = asyncio.get_running_loop()
+
+    def _run() -> bytes:
+        result = subprocess.run(
+            [node_bin, str(_PDF_SCRIPT)],
+            input=combined.encode("utf-8"),
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(err or "PDF generation script exited with non-zero status")
+        return result.stdout
+
+    try:
+        pdf_bytes = await loop.run_in_executor(None, _run)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="PDF generation timed out",
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("PDF generation failed for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF generation failed: {exc}",
+        ) from exc
+
+    filename = f"{repo_id}-docs-{scope}-{language}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

@@ -326,4 +326,19 @@ export const api = {
     const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
     return `${base}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-zip`
   },
+  downloadDocPdf: async (repoId: string, jobId: string): Promise<Blob> => {
+    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+    const key = import.meta.env.VITE_API_KEY as string | undefined
+    const headers: Record<string, string> = {}
+    if (key) headers['X-API-Key'] = key
+    const res = await fetch(
+      `${base}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-pdf`,
+      { headers },
+    )
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new Error(text)
+    }
+    return res.blob()
+  },
 }
