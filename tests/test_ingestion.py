@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from aquila_atlas.ingestion.chunker import chunk_entity
 from aquila_atlas.ingestion.metadata import CodeEntity
-from aquila_atlas.ingestion.parser import parse, parse_python
+from aquila_atlas.ingestion.parsers import parse, parse_python
 from aquila_atlas.ingestion.sources import (
     LocalFolderLoader,
     RawFile,

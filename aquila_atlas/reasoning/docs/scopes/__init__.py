@@ -1,0 +1,1 @@
+"""Documentation scope generators."""

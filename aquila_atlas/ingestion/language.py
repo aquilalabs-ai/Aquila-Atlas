@@ -81,49 +81,49 @@ _REGISTRY: dict[str, LanguagePlugin] = {}
 # Maps file extension → the module whose import side-effect registers its plugin.
 # Add ONE LINE here when integrating a new language — nothing else changes.
 _LAZY_MODULES: dict[str, str] = {
-    ".py": "aquila_atlas.ingestion.parser",
-    ".js": "aquila_atlas.ingestion.ts_parser",
-    ".jsx": "aquila_atlas.ingestion.ts_parser",
-    ".ts": "aquila_atlas.ingestion.ts_parser",
-    ".tsx": "aquila_atlas.ingestion.ts_parser",
+    ".py": "aquila_atlas.ingestion.parsers.python",
+    ".js": "aquila_atlas.ingestion.parsers.javascript",
+    ".jsx": "aquila_atlas.ingestion.parsers.javascript",
+    ".ts": "aquila_atlas.ingestion.parsers.javascript",
+    ".tsx": "aquila_atlas.ingestion.parsers.javascript",
     # Java
-    ".java": "aquila_atlas.ingestion.treesitter_parser",
+    ".java": "aquila_atlas.ingestion.parsers.treesitter",
     # Go
-    ".go": "aquila_atlas.ingestion.treesitter_parser",
+    ".go": "aquila_atlas.ingestion.parsers.treesitter",
     # Rust
-    ".rs": "aquila_atlas.ingestion.treesitter_parser",
+    ".rs": "aquila_atlas.ingestion.parsers.treesitter",
     # C
-    ".c": "aquila_atlas.ingestion.treesitter_parser",
-    ".h": "aquila_atlas.ingestion.treesitter_parser",
+    ".c": "aquila_atlas.ingestion.parsers.treesitter",
+    ".h": "aquila_atlas.ingestion.parsers.treesitter",
     # C++
-    ".cpp": "aquila_atlas.ingestion.treesitter_parser",
-    ".cc": "aquila_atlas.ingestion.treesitter_parser",
-    ".cxx": "aquila_atlas.ingestion.treesitter_parser",
-    ".hpp": "aquila_atlas.ingestion.treesitter_parser",
-    ".hh": "aquila_atlas.ingestion.treesitter_parser",
+    ".cpp": "aquila_atlas.ingestion.parsers.treesitter",
+    ".cc": "aquila_atlas.ingestion.parsers.treesitter",
+    ".cxx": "aquila_atlas.ingestion.parsers.treesitter",
+    ".hpp": "aquila_atlas.ingestion.parsers.treesitter",
+    ".hh": "aquila_atlas.ingestion.parsers.treesitter",
     # C#
-    ".cs": "aquila_atlas.ingestion.treesitter_parser",
+    ".cs": "aquila_atlas.ingestion.parsers.treesitter",
     # Ruby
-    ".rb": "aquila_atlas.ingestion.treesitter_parser",
+    ".rb": "aquila_atlas.ingestion.parsers.treesitter",
     # PHP
-    ".php": "aquila_atlas.ingestion.treesitter_parser",
+    ".php": "aquila_atlas.ingestion.parsers.treesitter",
     # Kotlin
-    ".kt": "aquila_atlas.ingestion.treesitter_parser",
-    ".kts": "aquila_atlas.ingestion.treesitter_parser",
+    ".kt": "aquila_atlas.ingestion.parsers.treesitter",
+    ".kts": "aquila_atlas.ingestion.parsers.treesitter",
     # Swift
-    ".swift": "aquila_atlas.ingestion.treesitter_parser",
+    ".swift": "aquila_atlas.ingestion.parsers.treesitter",
     # Lua
-    ".lua": "aquila_atlas.ingestion.treesitter_parser",
+    ".lua": "aquila_atlas.ingestion.parsers.treesitter",
     # Bash
-    ".sh": "aquila_atlas.ingestion.treesitter_parser",
-    ".bash": "aquila_atlas.ingestion.treesitter_parser",
+    ".sh": "aquila_atlas.ingestion.parsers.treesitter",
+    ".bash": "aquila_atlas.ingestion.parsers.treesitter",
     # Scala
-    ".scala": "aquila_atlas.ingestion.treesitter_parser",
+    ".scala": "aquila_atlas.ingestion.parsers.treesitter",
     # COBOL
-    ".cob": "aquila_atlas.ingestion.cobol_parser",
-    ".cbl": "aquila_atlas.ingestion.cobol_parser",
-    ".cobol": "aquila_atlas.ingestion.cobol_parser",
-    ".cpy": "aquila_atlas.ingestion.cobol_parser",
+    ".cob": "aquila_atlas.ingestion.parsers.cobol",
+    ".cbl": "aquila_atlas.ingestion.parsers.cobol",
+    ".cobol": "aquila_atlas.ingestion.parsers.cobol",
+    ".cpy": "aquila_atlas.ingestion.parsers.cobol",
 }
 
 

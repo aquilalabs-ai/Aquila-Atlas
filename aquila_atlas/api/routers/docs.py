@@ -179,7 +179,9 @@ def _resolve_doc_files(
     """Return (files, record) from memory or DB; files is empty if not found/ready."""
     record = _doc_jobs.get(job_id)
     if record is not None and record.repo_id == repo_id and record.status == "done":
-        return record.files, record
+        if record.files:
+            return record.files, record
+        # Files were cleared after DB persist; fall through to DB but keep record for metadata
     doc_store = getattr(request.app.state, "doc_store", None)
     if doc_store is not None:
         from aquila_atlas.api.store import DocStore  # noqa: PLC0415
@@ -187,7 +189,7 @@ def _resolve_doc_files(
         if isinstance(doc_store, DocStore):
             row = doc_store.load_doc(job_id)
             if row is not None and row["repo_id"] == repo_id:
-                return row["files"], None
+                return row["files"], record
     return {}, None
 
 
@@ -298,14 +300,16 @@ async def get_doc_content(
                 status_code=status.HTTP_425_TOO_EARLY,
                 detail=f"Job status is '{record.status}', not done yet",
             )
-        return DocContentResponse(
-            job_id=record.job_id,
-            repo_id=record.repo_id,
-            scope=record.scope,
-            style=record.style,
-            language=record.language,
-            files=record.files,
-        )
+        if record.files:
+            return DocContentResponse(
+                job_id=record.job_id,
+                repo_id=record.repo_id,
+                scope=record.scope,
+                style=record.style,
+                language=record.language,
+                files=record.files,
+            )
+        # Files were cleared from memory after DB persist; fall through to DB
 
     # Fallback to DB
     doc_store = getattr(request.app.state, "doc_store", None)

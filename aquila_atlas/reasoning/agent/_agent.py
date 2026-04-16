@@ -1,27 +1,26 @@
-"""LangGraph agent for Aquila-Atlas codebase Q&A.
-
-Implements a router → retrieval → reasoning pipeline with conversation memory
-and optional LangSmith tracing.
-"""
+"""CodebaseAgent — stateful multi-turn wrapper around the LangGraph pipeline."""
 
 from __future__ import annotations
 
 import logging
-import os
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import START, StateGraph
-from langgraph.graph.message import add_messages
 
-_RouteType = Literal["structural", "implementation", "analysis", "generation", "diagram", "direct"]
+from ._langsmith import _configure_langsmith
+from ._nodes import _msg_text
+from ._prompts import _NODE_STATUS, _SYSTEM_PROMPT_BASE, _TOOL_STATUS
 
 logger = logging.getLogger("aquila.reasoning")
 
-# ---------------------------------------------------------------------------
-# Streaming event types
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
+    from langchain_core.tools import BaseTool
+
+    from aquila_atlas.config import Settings
+    from aquila_atlas.knowledge.service import KnowledgeService
 
 
 class AgentStreamEvent(TypedDict, total=False):
@@ -34,385 +33,6 @@ class AgentStreamEvent(TypedDict, total=False):
     status: str
     input_tokens: int
     output_tokens: int
-
-
-# Human-readable status labels per LangGraph node and LangChain tool name.
-_NODE_STATUS: dict[str, str] = {
-    "router": "Classifying query...",
-    "retrieval": "Searching codebase...",
-    "reasoning": "Thinking...",
-    "tools": "Running tools...",
-}
-
-_TOOL_STATUS: dict[str, str] = {
-    "semantic_search": "Semantic search...",
-    "graph_traversal": "Traversing dependency graph...",
-    "file_reader": "Reading file...",
-    "summarize": "Summarizing...",
-    "generate_docstring": "Generating docstring...",
-    "generate_mermaid": "Generating diagram...",
-    "validate_mermaid": "Validating diagram...",
-    "get-schema": "Reading graph schema...",
-    "read-cypher": "Querying graph...",
-    "write-cypher": "Writing to graph...",
-    "git_log": "Reading git history...",
-    "git_status": "Checking git status...",
-    "git_diff": "Computing git diff...",
-    "git_blame": "Running git blame...",
-}
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
-
-    from langchain_core.tools import BaseTool
-    from langgraph.graph.state import CompiledStateGraph
-
-    from aquila_atlas.config import Settings
-    from aquila_atlas.knowledge.service import KnowledgeService
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _msg_text(content: Any) -> str:
-    """Extract plain text from an LLM message content field.
-
-    Handles both plain strings and the list-of-blocks format used by some
-    OpenAI-compatible providers: ``[{"type": "text", "text": "..."}]``.
-    """
-    if isinstance(content, list):
-        return "".join(
-            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
-        )
-    return str(content) if content else ""
-
-
-# ---------------------------------------------------------------------------
-# Prompt loader — reads .md files from the prompts/ directory next to this file
-# ---------------------------------------------------------------------------
-
-_PROMPTS_DIR = __file__.replace("agent.py", "prompts")
-
-
-def _load_prompt(name: str) -> str:
-    """Load a prompt template from ``prompts/<name>.md``.
-
-    Falls back to an empty string if the file is missing so the agent
-    degrades gracefully during development (e.g. before prompts are written).
-    """
-    import pathlib  # noqa: PLC0415
-
-    path = pathlib.Path(_PROMPTS_DIR) / f"{name}.md"
-    try:
-        return path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        logger.warning("prompt file not found: %s", path)
-        return ""
-
-
-# Loaded once at import time — restart the server to pick up edits.
-_SYSTEM_PROMPT_BASE = _load_prompt("system_base")
-_ROUTER_PROMPT = _load_prompt("router")
-
-_SKILL_MAP: dict[str, str] = {
-    "structural": _load_prompt("skill_architecture"),
-    "implementation": _load_prompt("skill_implementation"),
-    "analysis": _load_prompt("skill_analysis"),
-    "generation": _load_prompt("skill_documentation"),
-    "diagram": _load_prompt("skill_diagram"),
-}
-
-# ---------------------------------------------------------------------------
-# State
-# ---------------------------------------------------------------------------
-
-
-class AgentState(TypedDict):
-    """LangGraph state threaded through every node."""
-
-    messages: Annotated[list[BaseMessage], add_messages]
-    repo_id: str
-    retrieved_context: str
-    route: _RouteType
-
-
-# ---------------------------------------------------------------------------
-# Node implementations
-# ---------------------------------------------------------------------------
-
-
-def _router_node(state: AgentState, llm: Any) -> dict[str, Any]:
-    """Classify the query as 'retrieval' or 'direct'."""
-    last_human = next(
-        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-        None,
-    )
-    if last_human is None:
-        return {"route": "direct"}
-
-    query = str(last_human.content)
-
-    # Include the last 2 turns of conversation so the router can classify
-    # follow-up questions correctly (e.g. "are they all python files?" after
-    # "how many files?" needs the prior context to route as "structural").
-    prior = [m for m in state["messages"] if isinstance(m, (HumanMessage, AIMessage))]
-    prior = prior[:-1]  # exclude the current human message
-    if prior:
-        snippet_lines = []
-        for m in prior[-4:]:  # at most 2 prior turns
-            role = "User" if isinstance(m, HumanMessage) else "AI"
-            text = _msg_text(m.content)[:300].replace("\n", " ")
-            snippet_lines.append(f"  {role}: {text}")
-        context_block = (
-            "Recent conversation (for context only):\n" + "\n".join(snippet_lines) + "\n\n"
-        )
-    else:
-        context_block = ""
-
-    logger.info("agent[router] query=%r prior_turns=%d", query, len(prior))
-    response = llm.invoke(
-        [HumanMessage(content=_ROUTER_PROMPT.format(context_block=context_block, query=query))],
-    )
-    text = str(response.content).strip().lower()
-    if "direct" in text:
-        route: _RouteType = "direct"
-    elif "diagram" in text:
-        route = "diagram"
-    elif "structural" in text:
-        route = "structural"
-    elif "generation" in text:
-        route = "generation"
-    elif "analysis" in text:
-        route = "analysis"
-    else:
-        route = "implementation"
-    logger.info("agent[router] → route=%s", route)
-    return {"route": route}
-
-
-def _retrieval_node(state: AgentState, service: KnowledgeService) -> dict[str, Any]:
-    """Fetch relevant code chunks from the vector store."""
-    last_human = next(
-        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-        None,
-    )
-    query = str(last_human.content) if last_human else ""
-    repo_id = state["repo_id"]
-    route = state.get("route", "implementation")
-
-    # For structural/overview questions the user query is vague ("what does this do?").
-    # Augment it so the vector search returns representative entry-point chunks.
-    if route == "structural":
-        search_query = f"main module entry point overview architecture {query}"
-        top_k = 6
-    elif route == "diagram":
-        # Broad structural sweep: entry points, key classes, key files
-        search_query = f"module class file structure entry point overview {query}"
-        top_k = 5
-    elif route == "generation":
-        search_query = query
-        top_k = 5
-    elif route == "analysis":
-        search_query = f"suggestion design formula quality computation {query}"
-        top_k = 4
-    else:
-        search_query = query
-        top_k = 4
-
-    logger.info("agent[retrieval] repo=%s route=%s query=%r", repo_id, route, search_query)
-
-    results = service.search(query=search_query, repo_id=repo_id, top_k=top_k)
-    if not results:
-        logger.info("agent[retrieval] → 0 chunks found")
-        return {"retrieved_context": "No relevant code found in the repository."}
-
-    logger.info("agent[retrieval] → %d chunks found", len(results))
-    parts = [
-        f"# {r.file_path}:{r.start_line}-{r.end_line} [{r.chunk_type}] "
-        f"score={r.score:.4f}\n{r.content}"
-        for r in results
-    ]
-    return {"retrieved_context": "\n\n---\n\n".join(parts)}
-
-
-def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
-    """Generate the assistant response, incorporating any retrieved context."""
-    context = state.get("retrieved_context", "")
-    route = state.get("route", "implementation")
-    repo_id = state["repo_id"]
-    skill = _SKILL_MAP.get(route, "")
-    logger.info(
-        "agent[reasoning] route=%s skill=%s context_len=%d",
-        route,
-        bool(skill),
-        len(context),
-    )
-    system_content = _SYSTEM_PROMPT_BASE
-    # Explicitly pin the repo_id so the LLM never guesses "repo" or another placeholder.
-    system_content += (
-        f"\n\n## Active repository\n"
-        f"repo_id: `{repo_id}` — pass this exact string as the `repo_id` parameter "
-        f"in **every** tool call, without exception."
-    )
-    if skill:
-        system_content += f"\n\n{skill}"
-    if context:
-        system_content += f"\n\nRetrieved context from codebase:\n\n{context}"
-
-    # Guard against infinite tool-call loops: if 5+ tool results already exist in this
-    # turn, force the LLM to stop calling tools and synthesise a final answer.
-    from langchain_core.messages import ToolMessage  # noqa: PLC0415
-
-    tool_call_count = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
-    if tool_call_count >= 5:
-        logger.warning(
-            "agent[reasoning] %d tool calls detected — injecting stop-loop instruction",
-            tool_call_count,
-        )
-        system_content += (
-            "\n\n**IMPORTANT**: You have already called tools multiple times. "
-            "Do NOT call any more tools. Using the tool results already in this conversation, "
-            "write a complete, final answer for the user right now."
-        )
-
-    messages: list[BaseMessage] = [SystemMessage(content=system_content), *state["messages"]]
-    logger.debug(
-        "agent[reasoning] prompt messages=%d system_len=%d tool_calls_so_far=%d",
-        len(messages),
-        len(system_content),
-        tool_call_count,
-    )
-
-    response = llm.invoke(messages)
-    response_text = _msg_text(getattr(response, "content", ""))
-    tool_calls = getattr(response, "tool_calls", None)
-    logger.debug(
-        "agent[reasoning] response content_len=%d tool_calls=%r response_type=%s",
-        len(response_text),
-        tool_calls,
-        type(response).__name__,
-    )
-
-    # Recovery: if the LLM returned empty content with no valid tool calls, force a
-    # synthesis pass so the user never receives a blank response.
-    if not response_text and not tool_calls:
-        has_tool_results = tool_call_count > 0
-        if has_tool_results:
-            recovery_content = (
-                "Your last action produced no output. "
-                "Using the tool results already in this conversation, "
-                "write a complete answer for the user. "
-                "Do not call any more tools."
-            )
-        else:
-            recovery_content = (
-                "Your last response was empty. "
-                "Please provide a complete, helpful answer to the user's question "
-                "based on the context provided. Do not call any tools."
-            )
-        logger.warning(
-            "agent[reasoning] empty response — forcing recovery pass (has_tool_results=%s)",
-            has_tool_results,
-        )
-        recovery = llm.invoke(messages + [HumanMessage(content=recovery_content)])
-        if _msg_text(getattr(recovery, "content", "")):
-            response = recovery
-
-    return {"messages": [response]}
-
-
-def _route_condition(state: AgentState) -> str:
-    return state.get("route", "implementation")
-
-
-# ---------------------------------------------------------------------------
-# Graph factory
-# ---------------------------------------------------------------------------
-
-
-def build_graph(
-    service: KnowledgeService,
-    settings: Settings,
-    extra_tools: list[BaseTool] | None = None,
-) -> CompiledStateGraph[Any]:
-    """Compile the LangGraph state machine.
-
-    Args:
-        service: Initialised knowledge service.
-        settings: Application settings (LLM config).
-        extra_tools: Additional LangChain tools to bind to the LLM (e.g. MCP tools).
-            Combined with the built-in knowledge tools from
-            :func:`~aquila_atlas.reasoning.tools.get_tools`.
-
-    Returns:
-        Compiled LangGraph ready for ``invoke`` / ``stream`` / ``ainvoke`` / ``astream``.
-    """
-    from langchain_openai import ChatOpenAI  # noqa: PLC0415
-    from langgraph.prebuilt import ToolNode, tools_condition  # noqa: PLC0415
-
-    # noqa: PLC0415
-    from aquila_atlas.reasoning.tools import get_tools as get_knowledge_tools  # noqa: PLC0415
-
-    llm = ChatOpenAI(
-        model=settings.llm_model,
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        streaming=True,
-        stream_usage=True,  # include usage metadata in the final streaming chunk
-    )
-
-    all_tools = get_knowledge_tools(service, settings) + (extra_tools or [])
-    llm_with_tools = llm.bind_tools(all_tools)
-
-    def router_node(state: AgentState) -> dict[str, Any]:
-        return _router_node(state, llm)
-
-    def retrieval_node(state: AgentState) -> dict[str, Any]:
-        return _retrieval_node(state, service)
-
-    def reasoning_node(state: AgentState) -> dict[str, Any]:
-        from langchain_core.messages import ToolMessage  # noqa: PLC0415
-
-        tool_call_count = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
-        # Hard-stop: after 5 tool results, switch to bare LLM so tools_condition
-        # sees no tool_calls and exits the graph immediately.  This prevents the
-        # recursion limit from being reached on broad structural questions.
-        if state.get("route") == "direct" or tool_call_count >= 5:
-            active_llm = llm
-        else:
-            active_llm = llm_with_tools
-        return _reasoning_node(state, active_llm)
-
-    builder: StateGraph[AgentState] = StateGraph(AgentState)
-    builder.add_node("router", router_node)
-    builder.add_node("retrieval", retrieval_node)
-    builder.add_node("reasoning", reasoning_node)
-    builder.add_node("tools", ToolNode(all_tools, handle_tool_errors=True))
-
-    builder.add_edge(START, "router")
-    builder.add_conditional_edges(
-        "router",
-        _route_condition,
-        {
-            "implementation": "retrieval",  # pre-fetch vector context first
-            "structural": "retrieval",  # broad retrieval + graph tools as supplement
-            "analysis": "retrieval",  # fetch code with formulas first
-            "generation": "retrieval",  # fetch the code to document first
-            "diagram": "retrieval",  # light structural context before generate_mermaid
-            "direct": "reasoning",  # no retrieval needed
-        },
-    )
-    builder.add_edge("retrieval", "reasoning")
-    builder.add_conditional_edges("reasoning", tools_condition)
-    builder.add_edge("tools", "reasoning")
-
-    return builder.compile()
-
-
-# ---------------------------------------------------------------------------
-# CodebaseAgent — stateful multi-turn wrapper
-# ---------------------------------------------------------------------------
 
 
 class CodebaseAgent:
@@ -440,6 +60,9 @@ class CodebaseAgent:
         from langchain_openai import ChatOpenAI  # noqa: PLC0415
 
         from aquila_atlas.config import get_settings  # noqa: PLC0415
+
+        from ._graph import build_graph
+        from ._state import AgentState  # noqa: F401
 
         s = settings or get_settings()
         _configure_langsmith(s)
@@ -530,11 +153,10 @@ class CodebaseAgent:
     ) -> AsyncIterator[AgentStreamEvent]:
         """Async streaming with interleaved status events.
 
-        Yields :class:`AgentStreamEvent` dicts — each has either a ``token``
-        key (LLM output fragment) or a ``status`` key (human-readable progress
-        label such as *"Searching codebase..."*).  Used by the SSE chat
-        endpoint so the UI can show the user what the agent is doing instead
-        of a blank screen.
+        Yields dicts — each has either a ``token`` key (LLM output fragment)
+        or a ``status`` key (human-readable progress label such as
+        *"Searching codebase..."*).  Used by the SSE chat endpoint so the UI
+        can show the user what the agent is doing instead of a blank screen.
 
         Args:
             query: Natural language question about the codebase.
@@ -575,6 +197,12 @@ class CodebaseAgent:
                         continue
 
                     elif etype in {"on_chat_model_stream", "on_llm_stream"}:
+                        # Only stream tokens produced by the reasoning node.
+                        # Tool-internal LLM calls (summarize, generate_mermaid, …) run
+                        # inside the "tools" ToolNode — their chunks must not leak into
+                        # the user-facing stream.
+                        if node and node != "reasoning":
+                            continue
                         chunk = event["data"].get("chunk")
                         text = _msg_text(getattr(chunk, "content", chunk))
                         if text:
@@ -584,10 +212,7 @@ class CodebaseAgent:
                     elif etype in {"on_chat_model_end", "on_llm_end"}:
                         output = event["data"].get("output") or event["data"].get("content")
                         if output is not None:
-                            # LangChain AIMessage stores usage in usage_metadata
-                            # (standard) or response_metadata.token_usage (OpenAI).
-                            # Accumulate across all LLM calls in the turn (router +
-                            # reasoning + any tool-call reasoning steps).
+                            # Accumulate token usage from ALL LLM calls (router, tools, …).
                             usage_meta = getattr(output, "usage_metadata", None)
                             if isinstance(usage_meta, dict):
                                 input_tokens += usage_meta.get("input_tokens", 0)
@@ -602,14 +227,15 @@ class CodebaseAgent:
                                 input_tokens += tok.get("prompt_tokens", 0)
                                 output_tokens += tok.get("completion_tokens", 0)
 
-                            text = _msg_text(getattr(output, "content", output))
-                            if text:
-                                last_answer_text = text
+                            # Only update last_answer_text from the reasoning node so
+                            # tool-internal LLM responses (summarize, etc.) don't
+                            # overwrite the real final answer.
+                            if node in ("reasoning", ""):
+                                text = _msg_text(getattr(output, "content", output))
+                                if text:
+                                    last_answer_text = text
 
                     elif etype == "on_chain_end" and node == "reasoning":
-                        # Reliable fallback: LangGraph always emits on_chain_end with the
-                        # node's full output dict, even when on_chat_model_stream events
-                        # don't propagate from sync nodes running in a thread pool.
                         output = event["data"].get("output", {})
                         if isinstance(output, dict):
                             msgs = output.get("messages", [])
@@ -627,6 +253,16 @@ class CodebaseAgent:
                     "token": "\n\n_Response timed out. Please try again or rephrase your question._"
                 }
                 accumulated = "(timed out)"
+        except asyncio.CancelledError:
+            # The HTTP request was cancelled (client disconnected).  Roll back the
+            # user message that was already appended so history stays consistent.
+            logger.info(
+                "CodebaseAgent.astream_with_status cancelled (client disconnected) repo=%s",
+                self._repo_id,
+            )
+            if self._history and isinstance(self._history[-1], HumanMessage):
+                self._history.pop()
+            raise  # propagate so the SSE generator can close cleanly
         except Exception as exc:  # noqa: BLE001
             from langgraph.errors import GraphRecursionError  # noqa: PLC0415
 
@@ -640,7 +276,6 @@ class CodebaseAgent:
                 if not accumulated:
                     yield {"token": msg}
                     accumulated = msg
-                # Don't re-raise — treat as a completed (degraded) response.
             else:
                 raise
 
@@ -648,8 +283,6 @@ class CodebaseAgent:
             accumulated = last_answer_text
             yield {"token": accumulated}
 
-        # Yield final event with token counts (always, so the frontend can clear
-        # the "0 / 0" placeholder even when the model doesn't report usage).
         if not timed_out:
             yield {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
@@ -701,10 +334,6 @@ class CodebaseAgent:
         await self._compact_history_async()
         self._history.append(HumanMessage(content=query))
         accumulated = ""
-        # Fallback for non-SSE endpoints: track the last text-bearing LLM
-        # response that is *not* a pure tool-dispatch turn.  We update this
-        # every time we see such a response so the final answer is always
-        # captured even after multiple tool-call iterations.
         last_answer_text = ""
 
         config = RunnableConfig(recursion_limit=25)
@@ -738,8 +367,6 @@ class CodebaseAgent:
                             last_answer_text = text
 
                 elif etype == "on_chain_end" and node == "reasoning":
-                    # Reliable fallback: capture the node output directly, since
-                    # on_chat_model_stream events may not propagate from sync nodes.
                     output = event["data"].get("output", {})
                     if isinstance(output, dict):
                         msgs = output.get("messages", [])
@@ -775,7 +402,6 @@ class CodebaseAgent:
             else:
                 raise
 
-        # Non-streaming / batch endpoints: emit the captured final answer.
         if not accumulated and last_answer_text:
             accumulated = last_answer_text
             yield accumulated
@@ -792,11 +418,7 @@ class CodebaseAgent:
     # ------------------------------------------------------------------
 
     def _retry_bare(self) -> str:
-        """Re-invoke the plain LLM (no tools) when the graph returns an empty response.
-
-        ``self._history`` already contains the current HumanMessage, so the
-        retry gets full context without any extra setup.
-        """
+        """Re-invoke the plain LLM (no tools) when the graph returns an empty response."""
         logger.info("agent[retry] invoking bare LLM for recovery")
         result = self._compaction_llm.invoke(
             [SystemMessage(content=_SYSTEM_PROMPT_BASE), *self._history]
@@ -896,24 +518,12 @@ class CodebaseAgent:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_input(self) -> AgentState:
+    def _build_input(self) -> dict[str, Any]:
+        from ._state import AgentState  # noqa: PLC0415
+
         return AgentState(
             messages=list(self._history),
             repo_id=self._repo_id,
             retrieved_context="",
             route="implementation",
         )
-
-
-# ---------------------------------------------------------------------------
-# LangSmith tracing
-# ---------------------------------------------------------------------------
-
-
-def _configure_langsmith(settings: Settings) -> None:
-    """Enable LangSmith tracing if an API key is configured."""
-    if settings.langsmith_api_key:
-        os.environ["LANGCHAIN_TRACING_V2"] = "true"
-        os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
-        os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
-        os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
