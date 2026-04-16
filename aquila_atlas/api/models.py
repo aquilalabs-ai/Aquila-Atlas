@@ -60,7 +60,9 @@ class RepoStatsResponse(BaseModel):
     relationships: int = Field(0, description="Total graph relationships")
     chunks: int = Field(0, description="Vector chunks stored")
     files: int = Field(0, description="Unique files in vector store")
-    commit_sha: str | None = Field(None, description="Last ingested commit SHA (null for non-git sources)")
+    commit_sha: str | None = Field(
+        None, description="Last ingested commit SHA (null for non-git sources)"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -653,7 +655,7 @@ class DocGenRequest(BaseModel):
     exclude_extensions: list[str] | None = Field(
         None,
         description=(
-            "File extensions to skip (e.g. [\".md\", \".png\"]). "
+            'File extensions to skip (e.g. [".md", ".png"]). '
             "Pass null to use the built-in defaults (images, markup, binaries, lock files). "
             "Pass [] to disable extension filtering entirely."
         ),

@@ -15,7 +15,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 
-_RouteType = Literal["structural", "implementation", "generation", "diagram", "direct"]
+_RouteType = Literal["structural", "implementation", "analysis", "generation", "diagram", "direct"]
 
 logger = logging.getLogger("aquila.reasoning")
 
@@ -55,6 +55,10 @@ _TOOL_STATUS: dict[str, str] = {
     "get-schema": "Reading graph schema...",
     "read-cypher": "Querying graph...",
     "write-cypher": "Writing to graph...",
+    "git_log": "Reading git history...",
+    "git_status": "Checking git status...",
+    "git_diff": "Computing git diff...",
+    "git_blame": "Running git blame...",
 }
 
 if TYPE_CHECKING:
@@ -114,6 +118,7 @@ _ROUTER_PROMPT = _load_prompt("router")
 _SKILL_MAP: dict[str, str] = {
     "structural": _load_prompt("skill_architecture"),
     "implementation": _load_prompt("skill_implementation"),
+    "analysis": _load_prompt("skill_analysis"),
     "generation": _load_prompt("skill_documentation"),
     "diagram": _load_prompt("skill_diagram"),
 }
@@ -178,6 +183,8 @@ def _router_node(state: AgentState, llm: Any) -> dict[str, Any]:
         route = "structural"
     elif "generation" in text:
         route = "generation"
+    elif "analysis" in text:
+        route = "analysis"
     else:
         route = "implementation"
     logger.info("agent[router] → route=%s", route)
@@ -198,17 +205,20 @@ def _retrieval_node(state: AgentState, service: KnowledgeService) -> dict[str, A
     # Augment it so the vector search returns representative entry-point chunks.
     if route == "structural":
         search_query = f"main module entry point overview architecture {query}"
-        top_k = 10
+        top_k = 6
     elif route == "diagram":
         # Broad structural sweep: entry points, key classes, key files
         search_query = f"module class file structure entry point overview {query}"
-        top_k = 8
+        top_k = 5
     elif route == "generation":
         search_query = query
-        top_k = 8
+        top_k = 5
+    elif route == "analysis":
+        search_query = f"suggestion design formula quality computation {query}"
+        top_k = 4
     else:
         search_query = query
-        top_k = 6
+        top_k = 4
 
     logger.info("agent[retrieval] repo=%s route=%s query=%r", repo_id, route, search_query)
 
@@ -362,7 +372,17 @@ def build_graph(
         return _retrieval_node(state, service)
 
     def reasoning_node(state: AgentState) -> dict[str, Any]:
-        return _reasoning_node(state, llm_with_tools)
+        from langchain_core.messages import ToolMessage  # noqa: PLC0415
+
+        tool_call_count = sum(1 for m in state["messages"] if isinstance(m, ToolMessage))
+        # Hard-stop: after 5 tool results, switch to bare LLM so tools_condition
+        # sees no tool_calls and exits the graph immediately.  This prevents the
+        # recursion limit from being reached on broad structural questions.
+        if state.get("route") == "direct" or tool_call_count >= 5:
+            active_llm = llm
+        else:
+            active_llm = llm_with_tools
+        return _reasoning_node(state, active_llm)
 
     builder: StateGraph[AgentState] = StateGraph(AgentState)
     builder.add_node("router", router_node)
@@ -377,6 +397,7 @@ def build_graph(
         {
             "implementation": "retrieval",  # pre-fetch vector context first
             "structural": "retrieval",  # broad retrieval + graph tools as supplement
+            "analysis": "retrieval",  # fetch code with formulas first
             "generation": "retrieval",  # fetch the code to document first
             "diagram": "retrieval",  # light structural context before generate_mermaid
             "direct": "reasoning",  # no retrieval needed
@@ -760,9 +781,7 @@ class CodebaseAgent:
             yield accumulated
 
         if not accumulated:
-            logger.warning(
-                "agent[astream] empty response, retrying with bare LLM query=%r", query
-            )
+            logger.warning("agent[astream] empty response, retrying with bare LLM query=%r", query)
             accumulated = await self._retry_bare_async()
             if accumulated:
                 yield accumulated

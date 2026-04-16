@@ -25,7 +25,6 @@ from pathlib import Path
 
 from aquila_atlas.ingestion.metadata import CodeEntity
 
-
 # ---------------------------------------------------------------------------
 # Internal COBOL AST types
 # ---------------------------------------------------------------------------
@@ -137,7 +136,7 @@ def _extract_program_id(parsed: _ParsedCobol) -> None:
 def _extract_divisions(parsed: _ParsedCobol) -> None:
     divisions: list[_Division] = []
     div_pattern = re.compile(
-        r"^\s+(IDENTIFICATION|ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION",
+        r"^\s*(IDENTIFICATION|ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION",
         re.IGNORECASE,
     )
     for i, line in enumerate(parsed.lines):
@@ -159,8 +158,46 @@ _CICS_RE = re.compile(
     r"\bEXEC\s+CICS\s+(?:LINK|XCTL)\s+PROGRAM\s*\(\s*['\"]?([A-Z0-9][A-Z0-9-]*)['\"]?",
     re.IGNORECASE,
 )
-# Paragraph header: name starting in area A (cols 8-11 → position 7+ after stripping seq)
-_PARA_RE = re.compile(r"^       ([A-Z0-9][A-Z0-9-]*)\.\s*$", re.IGNORECASE)
+
+# COBOL paragraph header patterns.
+#
+# COBOL fixed format (most common):
+#   Col 1-6:  Sequence number area (may be digits or blanks)
+#   Col 7:    Indicator (* = comment, space = normal, D = debug, / = page eject)
+#   Col 8-11: Area A — paragraph names, DIVISION/SECTION headers START here
+#   Col 12+:  Area B — statements
+#
+# After _strip_sequence():
+#   has_seq=True  → 6 sequence digits stripped; indicator now at pos 0, Area A at pos 1-4
+#   has_seq=False → lines unchanged; blank seq area (pos 0-5) + indicator (pos 6) + Area A (pos 7+)
+#
+# A paragraph header is the ONLY content on its line: <whitespace><NAME>.<optional whitespace>
+# We allow 1-10 leading spaces so the pattern covers:
+#   - seq-stripped format (1 space: indicator)
+#   - standard fixed format with blank seq (7 spaces: 6 blank + 1 indicator)
+#   - non-standard layouts (e.g. 2-6 spaces when seq area is partially filled)
+#
+# Multi-word lines (e.g. "MAIN-SECTION SECTION.") are NOT matched because the
+# name group ([A-Z0-9][A-Z0-9-]*) captures only up to the first space or period,
+# and the \.\s*$ anchor rejects anything after the name except whitespace.
+_PARA_RE_SEQ = re.compile(
+    r"^[ \t]{1,4}([A-Z0-9][A-Z0-9-]*)\.\s*$",
+    re.IGNORECASE,
+)
+_PARA_RE_NOSEQ = re.compile(
+    r"^[ \t]{1,10}([A-Z0-9][A-Z0-9-]*)\.\s*$",
+    re.IGNORECASE,
+)
+
+# COBOL reserved words that look like paragraph names but aren't.
+_NOT_PARA_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "DIVISION", "SECTION", "DECLARATIVES", "END", "EXIT", "STOP",
+        "IDENTIFICATION", "ENVIRONMENT", "DATA", "PROCEDURE",
+        "FILE", "LINKAGE", "WORKING-STORAGE", "LOCAL-STORAGE", "REPORT",
+        "SCREEN", "COMMUNICATION",
+    }
+)
 
 
 def _extract_paragraphs(parsed: _ParsedCobol) -> None:
@@ -172,15 +209,25 @@ def _extract_paragraphs(parsed: _ParsedCobol) -> None:
     proc_start = proc_div.start_line  # 1-based → index proc_start-1
     proc_end = proc_div.end_line - 1  # exclusive 1-based → exclusive 0-based
 
+    # Choose the paragraph pattern that matches this file's column layout.
+    # seq-stripped files have Area A at position 1 (1 leading space = indicator column).
+    # non-stripped files have Area A at position 7 (6 blank seq cols + 1 indicator).
+    # _PARA_RE_SEQ  allows 1-4 leading spaces  (covers stripped + slight variation).
+    # _PARA_RE_NOSEQ allows 1-10 leading spaces (covers blank-seq and mixed formats).
+    para_re = _PARA_RE_SEQ if parsed.has_sequence_numbers else _PARA_RE_NOSEQ
+
     paragraphs: list[_Paragraph] = []
     lines = parsed.lines
 
     for i in range(proc_start, proc_end):  # 0-based
         line = lines[i] if i < len(lines) else ""
-        m = _PARA_RE.match(line)
+        m = para_re.match(line)
         if not m:
             continue
         para_name = m.group(1).upper()
+        # Skip reserved words that match the pattern but are not paragraph names
+        if para_name in _NOT_PARA_KEYWORDS:
+            continue
 
         # Gather preceding comment block
         comments: list[str] = []
@@ -228,9 +275,7 @@ def _extract_paragraphs(parsed: _ParsedCobol) -> None:
 def _extract_copy_references(parsed: _ParsedCobol) -> None:
     refs: list[str] = []
     copy_pattern = re.compile(r"\bCOPY\s+([A-Z0-9]+)", re.IGNORECASE)
-    sql_include = re.compile(
-        r"\bEXEC\s+SQL\s+INCLUDE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE
-    )
+    sql_include = re.compile(r"\bEXEC\s+SQL\s+INCLUDE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
     for line in parsed.lines:
         if line.strip().startswith("*"):
             continue
@@ -291,7 +336,11 @@ def parse_cobol(source_bytes: bytes, file_path: str) -> list[CodeEntity]:
 
     header_doc = "\n".join(parsed.header_comments) if parsed.header_comments else None
     if parsed.program_description:
-        header_doc = (header_doc + "\n\n" + parsed.program_description) if header_doc else parsed.program_description
+        header_doc = (
+            (header_doc + "\n\n" + parsed.program_description)
+            if header_doc
+            else parsed.program_description
+        )
 
     # Program-ID as name; fall back to stem when PROGRAM-ID is absent (copybooks)
     prog_name = parsed.program_id or path.stem.upper()
@@ -380,7 +429,7 @@ def _extract_cobol_calls(entities: list[CodeEntity]) -> list[tuple[str, str, str
         if entity.docstring and "PERFORMS:" in entity.docstring:
             for line in entity.docstring.splitlines():
                 if line.startswith("PERFORMS:"):
-                    targets_str = line[len("PERFORMS:"):].strip()
+                    targets_str = line[len("PERFORMS:") :].strip()
                     for target in targets_str.split(","):
                         target = target.strip()
                         if target:

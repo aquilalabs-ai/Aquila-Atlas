@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # Conversation compaction — summarise history when it exceeds this many tokens
     # (estimated at 4 chars per token). The last 4 messages (2 turns) are always
     # kept verbatim; older messages are replaced by an LLM-generated summary.
-    max_history_tokens: int = 4000
+    max_history_tokens: int = 2000
 
     # LangSmith (optional — leave blank to disable tracing)
     langsmith_api_key: str = ""

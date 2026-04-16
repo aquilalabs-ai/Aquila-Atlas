@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, useMemo } from 'react'
+import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -55,7 +55,16 @@ function CitationBadge({
 // Mermaid diagram block
 // ---------------------------------------------------------------------------
 
-function MermaidBlock({ chart, isStreaming }: { chart: string; isStreaming?: boolean }) {
+export function MermaidBlock({
+  chart,
+  isStreaming,
+  silent = false,
+}: {
+  chart: string
+  isStreaming?: boolean
+  /** When true, render failures show a plain code block instead of an error message. */
+  silent?: boolean
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const uid          = useId().replace(/:/g, '')
   const [pending, setPending]     = useState<string | null>(null)
@@ -121,15 +130,20 @@ function MermaidBlock({ chart, isStreaming }: { chart: string; isStreaming?: boo
         if (cancelled) return
         const msg = e instanceof Error ? e.message : 'Render error'
 
-        // Avoid noisy syntax error popups for invalid diagrams; show fallback text.
         if (lastSvgRef.current) {
-          setPending('Mermaid diagram contains syntax errors; showing last valid diagram version.')
+          // Keep the last valid SVG; only show a notice in non-silent mode
+          if (!silent) {
+            setPending('Mermaid diagram contains syntax errors; showing last valid diagram version.')
+          }
           setFallback(null)
           if (containerRef.current) {
             containerRef.current.innerHTML = lastSvgRef.current
           }
         } else {
-          setPending('Mermaid diagram contains syntax errors; showing source text.')
+          // No valid render yet — fall back to source
+          if (!silent) {
+            setPending('Mermaid diagram contains syntax errors; showing source text.')
+          }
           setFallback(chart)
           if (containerRef.current) {
             containerRef.current.innerHTML = ''
@@ -144,13 +158,22 @@ function MermaidBlock({ chart, isStreaming }: { chart: string; isStreaming?: boo
     return () => {
       cancelled = true
     }
-  }, [chart, uid, isStreaming])
+  }, [chart, uid, isStreaming, silent])
 
   function copy() {
     navigator.clipboard.writeText(chart).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2_000)
     })
+  }
+
+  // Silent mode + render failed with no previous SVG → plain code block
+  if (silent && fallback !== null && !lastSvgRef.current) {
+    return (
+      <pre className="my-3 overflow-x-auto rounded-lg border border-border-default bg-canvas-overlay px-3 py-2 text-[0.72rem] leading-relaxed text-fg-subtle">
+        <code>{chart}</code>
+      </pre>
+    )
   }
 
   return (
@@ -270,7 +293,7 @@ interface Props {
   onRegenerate?: () => void
 }
 
-export function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) {
+export const MessageBubble = memo(function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) {
   const isUser = message.role === 'user'
 
   const components = useMemo<Components>(() => ({
@@ -365,4 +388,4 @@ export function MessageBubble({ message, repoId, isLast, onRegenerate }: Props) 
       </div>
     </div>
   )
-}
+})

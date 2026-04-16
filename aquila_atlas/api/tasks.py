@@ -28,8 +28,8 @@ class JobRecord:
     chunks: int | None = None
     error: str | None = None
     # Resync-specific fields
-    ingest_type: str = "full"          # "full" | "resync"
-    changed_files: int | None = None   # number of files re-indexed (resync only)
+    ingest_type: str = "full"  # "full" | "resync"
+    changed_files: int | None = None  # number of files re-indexed (resync only)
     old_commit_sha: str | None = None
     new_commit_sha: str | None = None
 

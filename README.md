@@ -37,7 +37,7 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
 │                     INGESTION LAYER                         │
-│  GitHub API  │  tree-sitter (15 languages)  │  Token chunker│
+│  GitHub API  │  tree-sitter (16 languages)  │  Token chunker│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,10 +47,30 @@ The agent uses a 4-way router to classify every query before deciding how to ans
 router ──┬── "implementation" ──► vector retrieval ──► reasoning ──► [tool loop]
          ├── "structural"  ─────────────────────────► reasoning ──► [tool loop]
          ├── "generation"  ─────────────────────────► reasoning ──► [tool loop]
+         ├── "analysis"  ───────────────────────────► reasoning ──► [tool loop]
          └── "direct"      ─────────────────────────► reasoning
 ```
 
 Structural queries use MCP tools (`get-schema`, `read-cypher`) against Neo4j directly. All Cypher is executed via the Neo4j MCP server for safety and consistency.
+
+### Agent Tools
+
+The agent has access to ten built-in tools plus the MCP tools from the Neo4j server:
+
+| Tool | Purpose |
+|---|---|
+| `semantic_search` | Hybrid dense+sparse vector search over code chunks |
+| `file_reader` | Fetch the full content of any ingested source file |
+| `summarize` | Generate a plain-English summary of a file or class via LLM |
+| `generate_docstring` | Generate a Google-style docstring for a function or method |
+| `generate_mermaid` | Build a validated Mermaid diagram from live graph data |
+| `validate_mermaid` | Check Mermaid syntax using the real Node.js Mermaid parser |
+| `list_libs` | List all external libraries imported across the codebase |
+| `find_callers` | Find every function that calls a given target via graph traversal |
+| `list_entry_points` | List all public functions that are not called by any other code |
+| `call_chain` | Trace the execution call tree from a function up to N hops |
+| `get-schema` *(MCP)* | Retrieve the Neo4j graph schema |
+| `read-cypher` *(MCP)* | Execute a read-only Cypher query against Neo4j |
 
 ---
 
@@ -59,11 +79,11 @@ Structural queries use MCP tools (`get-schema`, `read-cypher`) against Neo4j dir
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0 — Foundation | ✅ Done | Project scaffold, CI, Docker stack |
-| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), tree-sitter parser (15 languages), token-aware chunker |
+| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), tree-sitter parser (16 languages incl. COBOL), token-aware chunker |
 | Phase 2 — Knowledge Layer | ✅ Done | Neo4j graph + Qdrant hybrid dense+sparse search + KnowledgeService facade |
-| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, LangChain tools, MCP tools, CLI |
-| Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, React/Vite UI with Monaco viewer |
-| Phase 5 — Documentation | ✅ Done | 5-scope AI doc generation, graph-enriched context, persistence, GitHub-style viewer |
+| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, 10 LangChain tools, MCP tools, CLI |
+| Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, React/Vite UI with suggestion chips + Monaco viewer |
+| Phase 5 — Documentation | ✅ Done | 5-scope AI doc generation, graph-enriched context, scored entry-point flows, persistence, GitHub-style viewer |
 | Phase 6 — VS Code Extension | Planned | IDE plugin |
 
 ---
@@ -222,9 +242,10 @@ npm run dev          # http://localhost:5173
 1. Click **Connect a repository** in the sidebar
 2. Choose a source — Local folder, GitHub URL, or ZIP upload
 3. Ingestion runs in the background; the repo list updates when done
-4. Chat with your codebase — responses stream token-by-token with live status labels
-5. Click any `` `file.py:42` `` citation to open the source in the built-in Monaco viewer
-6. Each repo keeps its own independent conversation history
+4. An empty chat shows six one-click suggestion chips (architecture overview, entry points, dependency diagram, external libraries, key classes, data flow) — click any to send immediately
+5. Chat with your codebase — responses stream token-by-token with live status labels
+6. Click any `` `file.py:42` `` citation to open the source in the built-in Monaco viewer
+7. Each repo keeps its own independent conversation history
 
 **Docs tab**:
 1. Select a scope — Architecture, Per module, Per file, Subsystems, or Execution flows
@@ -234,6 +255,8 @@ npm run dev          # http://localhost:5173
 5. GitHub-style markdown rendering with syntax-highlighted code blocks
 6. Copy individual files to clipboard or download the full set as a ZIP
 7. Saved documentation persists in PostgreSQL and is accessible from the Saved tab
+
+> **Execution flows scope**: Entry points are ranked by importance (orchestration degree, name heuristics, file-stem heuristics) and capped at 3 per module / 20 total, so documentation stays focused on the flows that matter.
 
 ### 7. REST API
 
@@ -301,6 +324,31 @@ print(summarize_architecture("my-repo", svc, focus="ingestion pipeline"))
 print(suggest_refactor("chunk_file", "my-repo", svc))
 print(generate_readme_section("Configuration", "my-repo", svc))
 ```
+
+---
+
+## Language Support
+
+| Language | Parser | Features |
+|---|---|---|
+| Python | `ast` (built-in) | Classes, functions, methods, imports, docstrings, decorators |
+| JavaScript / TypeScript / JSX / TSX | Dedicated tree-sitter parser | Arrow functions, JSDoc, interfaces, React components |
+| Java, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Swift, Lua, Bash, Scala | `tree-sitter-language-pack` | Classes, functions, imports per language |
+| COBOL | Custom regex parser | DIVISIONS, PARAGRAPHS, COPY/EXEC SQL INCLUDE references, PERFORM call edges |
+
+The COBOL parser handles both **sequence-numbered** (cols 1–6 are digits) and **non-sequence** (blank left margin) formats, covering IDENTIFICATION, ENVIRONMENT, DATA, and PROCEDURE divisions, with paragraph-level call-graph extraction via PERFORM/CALL/EXEC CICS.
+
+Adding a new language is one line in `_LAZY_MODULES` (for tree-sitter-language-pack grammars) or a new parser file for languages needing special handling.
+
+---
+
+## Mermaid Diagram Validation
+
+Diagram generation uses a **generate → validate → retry** loop (up to 5 attempts). Validation is performed by `mermaid_check.js` in the frontend package, which calls the real `mermaid.parse()` engine — the same parser the browser uses. This means:
+
+- Parse errors are accurate and match exactly what the renderer accepts
+- No Python heuristics or network round-trips to mermaid.ink
+- Falls back gracefully (no validation, accepts the diagram) when Node.js is not available
 
 ---
 

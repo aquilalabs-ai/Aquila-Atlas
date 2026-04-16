@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import pathlib
+import re
 from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -40,6 +41,7 @@ class GenerationCancelled(BaseException):
     def __init__(self, partial: dict[str, str] | None = None) -> None:
         super().__init__("Generation cancelled")
         self.partial: dict[str, str] = partial or {}
+
 
 # ---------------------------------------------------------------------------
 # Prompt loading
@@ -167,48 +169,95 @@ def _search_context(svc: KnowledgeService, repo_id: str, query: str, top_k: int 
 # File filtering
 # ---------------------------------------------------------------------------
 
-_DEFAULT_SKIP_EXTENSIONS: frozenset[str] = frozenset({
-    # Images / media
-    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tiff",
-    ".mp4", ".mp3", ".wav", ".ogg", ".flac", ".avi", ".mov", ".mkv", ".webm",
-
-    # Documentation markup
-    ".md", ".rst", ".txt",
-
-    # Compiled / binary artefacts
-    ".pyc", ".pyo", ".pyd",
-    ".class", ".jar", ".war", ".ear",
-    ".o", ".obj", ".a", ".lib",
-    ".so", ".dll", ".dylib",
-    ".exe", ".out", ".bin", ".apk", ".app", ".wasm", ".rlib",
-
-    # Data blobs
-    ".csv", ".parquet", ".feather",
-    ".pkl", ".pickle",
-    ".json", ".yaml", ".yml", ".xml",
-    ".db", ".sqlite",
-    ".npy", ".npz",
-    ".log",
-
-    # Archives
-    ".tar", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar",
-
-    # Misc
-    ".lock",
-})
+_DEFAULT_SKIP_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Images / media
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".webp",
+        ".bmp",
+        ".tiff",
+        ".mp4",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".avi",
+        ".mov",
+        ".mkv",
+        ".webm",
+        # Documentation markup
+        ".md",
+        ".rst",
+        ".txt",
+        # Compiled / binary artefacts
+        ".pyc",
+        ".pyo",
+        ".pyd",
+        ".class",
+        ".jar",
+        ".war",
+        ".ear",
+        ".o",
+        ".obj",
+        ".a",
+        ".lib",
+        ".so",
+        ".dll",
+        ".dylib",
+        ".exe",
+        ".out",
+        ".bin",
+        ".apk",
+        ".app",
+        ".wasm",
+        ".rlib",
+        # Data blobs
+        ".csv",
+        ".parquet",
+        ".feather",
+        ".pkl",
+        ".pickle",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".db",
+        ".sqlite",
+        ".npy",
+        ".npz",
+        ".log",
+        # Archives
+        ".tar",
+        ".zip",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        # Misc
+        ".lock",
+    }
+)
 
 # Exact filenames always skipped regardless of exclude_extensions.
-_ALWAYS_SKIP_NAMES: frozenset[str] = frozenset({
-    "package-lock.json",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    ".gitignore",
-    ".gitattributes",
-    ".gitmodules",
-    ".editorconfig",
-    ".npmrc",
-    ".nvmrc",
-})
+_ALWAYS_SKIP_NAMES: frozenset[str] = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        ".gitignore",
+        ".gitattributes",
+        ".gitmodules",
+        ".editorconfig",
+        ".npmrc",
+        ".nvmrc",
+    }
+)
 
 
 def _list_files(
@@ -429,6 +478,109 @@ def _build_architecture_graph_context(
 # ---------------------------------------------------------------------------
 
 
+_MERMAID_FIX_PROMPT = """\
+The following Mermaid diagram has syntax errors. Fix ONLY the diagram syntax so it renders correctly.
+Return ONLY the corrected diagram inside a ```mermaid fence — no explanation, no other text.
+
+Errors:
+{errors}
+
+Diagram to fix:
+```mermaid
+{diagram}
+```
+"""
+
+_MERMAID_FENCE_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+# Unquoted square-bracket labels containing parens: [Disk (JSON/NBT)]
+_UNQUOTED_SQUARE_RE = re.compile(r'\[([^\[\]"]*[()][^\[\]"]*)\]')
+# Already-quoted labels that still contain parens: ["foo()"] or ["foo (bar)"]
+_QUOTED_LABEL_RE = re.compile(r'(\[")([^"]*[()][^"]*)("\])')
+# Stadium nodes whose label contains nested parens: A(foo(bar)) or A(foo())
+_STADIUM_NESTED_RE = re.compile(r'(\w[\w.\-]*)(\()([^()]*\([^()]*\)[^()]*|[^()]*\(\)[^()]*)\)')
+
+
+def _sanitize_mermaid(diagram: str) -> str:
+    """Remove / escape parentheses from Mermaid node labels before validation.
+
+    Mermaid uses ``()`` as shape delimiters; any ``()`` nested inside a label
+    breaks the parser.  Four passes cover the common LLM mistakes:
+
+    1. Unquoted square-bracket labels with parens → wrap in quotes to preserve text:
+       ``[Disk (JSON/NBT)]`` → ``["Disk (JSON/NBT)"]``
+    2. Empty ``()`` pairs anywhere (function-call suffixes like ``foo()``).
+    3. Already-quoted labels that still have parens: ``["label()"]`` → ``["label"]``.
+    4. Nested parens in stadium nodes: ``A(foo(bar))`` → ``A(foo bar)``.
+    """
+    # 1. Unquoted [label (with parens)] → ["label (with parens)"]
+    diagram = _UNQUOTED_SQUARE_RE.sub(lambda m: f'["{m.group(1)}"]', diagram)
+
+    # 2. Remove bare () (e.g. trailing function-call markers)
+    diagram = re.sub(r"\(\)", "", diagram)
+
+    # 3. Quoted labels: ["any (text) here"] → ["any text here"]
+    def _clean_quoted(m: re.Match[str]) -> str:
+        inner = m.group(2).replace("(", "").replace(")", "")
+        return f'{m.group(1)}{inner}{m.group(3)}'
+
+    diagram = _QUOTED_LABEL_RE.sub(_clean_quoted, diagram)
+
+    # 4. Stadium nodes with nested parens: ID(label(nested)) → ID(label nested)
+    def _clean_stadium(m: re.Match[str]) -> str:
+        inner = m.group(3).replace("(", "").replace(")", "")
+        return f"{m.group(1)}{m.group(2)}{inner})"
+
+    diagram = _STADIUM_NESTED_RE.sub(_clean_stadium, diagram)
+
+    return diagram
+
+
+def _fix_mermaid_blocks(content: str, llm: Any) -> str:
+    """Find every ```mermaid block in *content*, validate it, and fix any that fail.
+
+    Up to 2 LLM fix attempts are made per block.  If a block cannot be fixed
+    it is left unchanged so the document is still usable.
+    """
+    from aquila_atlas.reasoning.mermaid import (  # noqa: PLC0415
+        extract_mermaid_block,
+        validate_with_node,
+    )
+
+    def _try_fix(diagram: str) -> str:
+        """Return a fixed diagram body, or the original if all retries fail."""
+        diagram = _sanitize_mermaid(diagram)
+        for attempt in range(2):
+            errors = validate_with_node(diagram)
+            if not errors:
+                return diagram
+            logger.info(
+                "docs_generator: mermaid fix attempt %d — errors: %s", attempt + 1, errors
+            )
+            fix_prompt = _MERMAID_FIX_PROMPT.replace("{errors}", "\n".join(errors)).replace(
+                "{diagram}", diagram
+            )
+            try:
+                resp = llm.invoke(fix_prompt)
+                raw: str = resp.content if hasattr(resp, "content") else str(resp)
+                diagram = extract_mermaid_block(raw)
+            except Exception as exc:
+                logger.warning("docs_generator: mermaid fix LLM error: %s", exc)
+                break
+        # Final validation — keep fixed version if now valid, otherwise revert
+        if not validate_with_node(diagram):
+            return diagram
+        logger.warning("docs_generator: mermaid block could not be fixed — keeping original")
+        return diagram  # return best-effort (may still have errors)
+
+    def _replacer(m: re.Match[str]) -> str:
+        original_body = m.group(1).strip()
+        fixed_body = _try_fix(original_body)
+        return f"```mermaid\n{fixed_body}\n```"
+
+    return _MERMAID_FENCE_RE.sub(_replacer, content)
+
+
 def _generate_architecture(
     svc: KnowledgeService,
     repo_id: str,
@@ -459,6 +611,7 @@ def _generate_architecture(
     )
     result = llm.invoke(prompt)
     content: str = result.content if hasattr(result, "content") else str(result)
+    content = _fix_mermaid_blocks(content, llm)
     progress_callback and progress_callback(1, 1, None)
     return {"architecture.md": content}
 
@@ -522,7 +675,9 @@ def _generate_per_module(
             result[f"{module}.md"] = content
             dependency_summaries[module] = _extract_summary(content)
     except GenerationCancelled:
-        logger.info("docs_generator: per_module cancelled — returning %d/%d modules", len(result), total)
+        logger.info(
+            "docs_generator: per_module cancelled — returning %d/%d modules", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
@@ -581,13 +736,17 @@ def _generate_per_file(
                 logger.warning("docs_generator: skipping file %r — LLM error: %s", file_path, exc)
                 content = f"# {file_path}\n\n> ⚠️ Documentation could not be generated for this file: `{exc}`\n"
             doc_path = file_path.replace("\\", "/")
-            stem, ext = doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+            stem, ext = (
+                doc_path.rsplit(".", 1) if "." in doc_path.split("/")[-1] else (doc_path, "")
+            )
             if ext and ext not in ("md", "txt", "rst"):
                 doc_path = stem + ".md"
             result[doc_path] = content
             dependency_summaries[file_path] = _extract_summary(content)
     except GenerationCancelled:
-        logger.info("docs_generator: per_file cancelled — returning %d/%d files", len(result), total)
+        logger.info(
+            "docs_generator: per_file cancelled — returning %d/%d files", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
@@ -643,11 +802,121 @@ def _generate_subsystems(
             content: str = out.content if hasattr(out, "content") else str(out)
             result[f"subsystems/{name.replace(chr(92), '/')}.md"] = content
     except GenerationCancelled:
-        logger.info("docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total)
+        logger.info(
+            "docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total
+        )
         raise GenerationCancelled(result)
 
     progress_callback and progress_callback(total, total, None)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Entry-point scoring
+# ---------------------------------------------------------------------------
+
+# Name prefixes that signal an important orchestration/entry function
+_ENTRY_NAME_PREFIXES: tuple[str, ...] = (
+    "main", "run", "start", "execute", "process", "handle",
+    "dispatch", "serve", "launch", "init", "setup", "bootstrap",
+    "invoke", "cli", "command",
+)
+
+# File stems that are strong signals for top-level entry points
+_ENTRY_FILE_STEMS: frozenset[str] = frozenset(
+    {
+        "__main__", "main", "cli", "app", "server", "run",
+        "manage", "wsgi", "asgi", "entrypoint", "entry_point",
+        "start", "bootstrap", "launcher",
+    }
+)
+
+# Maximum entry points to document per top-level module
+_MAX_EPS_PER_MODULE = 3
+# Absolute cap on total flows documented
+_MAX_FLOWS_TOTAL = 20
+
+
+def _score_entry_point(ep: dict[str, Any]) -> float:
+    """Assign a float importance score to an entry point dict.
+
+    Higher score → more important to document.  Scoring factors:
+
+    - **out_degree** (calls-out count): orchestrators call many things.
+    - **name heuristics**: common entry-point verb prefixes get a bonus.
+    - **file-stem heuristics**: files like ``main.py``, ``cli.py`` get a bonus.
+    """
+    score: float = float(ep.get("out_degree") or 0)
+
+    name_lower = str(ep.get("name", "")).split("::")[-1].lower().replace("-", "_")
+    if any(name_lower == p or name_lower.startswith(f"{p}_") for p in _ENTRY_NAME_PREFIXES):
+        score += 5.0
+
+    file_path = str(ep.get("file_path", "")).replace("\\", "/")
+    stem = file_path.rsplit("/", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    if stem.lower() in _ENTRY_FILE_STEMS:
+        score += 4.0
+
+    return score
+
+
+def _select_entry_points(
+    entry_points: list[dict[str, Any]],
+    exclude_extensions: frozenset[str] | None,
+) -> list[dict[str, Any]]:
+    """Filter, score, group, and cap entry points for flow documentation.
+
+    Strategy:
+    1. Drop files matching excluded extensions.
+    2. Score each entry point.
+    3. Group by top-level module (first path segment).
+    4. Within each module keep the top *_MAX_EPS_PER_MODULE* by score.
+    5. Sort the surviving entries by score descending.
+    6. Hard-cap at *_MAX_FLOWS_TOTAL*.
+
+    Returns the selected entry points ordered by importance (highest first).
+    """
+    # Extension filter
+    filtered = (
+        [
+            ep
+            for ep in entry_points
+            if not any(ep["file_path"].lower().endswith(ext) for ext in exclude_extensions)
+        ]
+        if exclude_extensions
+        else list(entry_points)
+    )
+
+    if not filtered:
+        return []
+
+    # Score everything
+    scored = [(ep, _score_entry_point(ep)) for ep in filtered]
+
+    # Group by top-level module
+    by_module: dict[str, list[tuple[dict[str, Any], float]]] = {}
+    for ep, sc in scored:
+        module = ep["file_path"].replace("\\", "/").split("/")[0]
+        by_module.setdefault(module, []).append((ep, sc))
+
+    # Keep top N per module
+    selected: list[tuple[dict[str, Any], float]] = []
+    for module_eps in by_module.values():
+        module_eps.sort(key=lambda x: -x[1])
+        selected.extend(module_eps[:_MAX_EPS_PER_MODULE])
+
+    # Global sort by score and cap
+    selected.sort(key=lambda x: -x[1])
+    selected = selected[:_MAX_FLOWS_TOTAL]
+
+    logger.info(
+        "docs_generator: entry-point selection — %d raw → %d after scoring/cap",
+        len(filtered),
+        len(selected),
+    )
+    return [ep for ep, _ in selected]
 
 
 def _generate_flows(
@@ -659,16 +928,21 @@ def _generate_flows(
     progress_callback: Callable[[int, int, str | None], None] | None,
     exclude_extensions: frozenset[str] | None = None,
 ) -> dict[str, str]:
-    entry_points = svc.get_entry_points(repo_id)
-    if exclude_extensions:
-        entry_points = [
-            ep for ep in entry_points
-            if not any(ep["file_path"].lower().endswith(ext) for ext in exclude_extensions)
-        ]
+    raw_entry_points = svc.get_entry_points(repo_id)
+    entry_points = _select_entry_points(raw_entry_points, exclude_extensions)
+
     if not entry_points:
-        return {
-            "flows/no_entry_points.md": "# No entry points found\n\nNo public functions without callers were detected in this repository."
-        }
+        msg = (
+            "# No meaningful entry points found\n\n"
+            "No public functions without callers were detected in this repository, "
+            "or all candidates were filtered out.\n\n"
+            "**Possible reasons**\n"
+            "- The language parser for this codebase does not extract CALLS edges.\n"
+            "- All public functions are called by other code in the repo (no true entry points).\n"
+            "- The codebase uses dynamic dispatch or decorators that hide call relationships.\n\n"
+            "Try the `architecture` or `per_module` scope instead for broader coverage."
+        )
+        return {"flows/no_entry_points.md": msg}
 
     total = len(entry_points)
     result: dict[str, str] = {}
@@ -678,6 +952,7 @@ def _generate_flows(
         for i, ep in enumerate(entry_points):
             name = ep["name"]
             file_path = ep["file_path"]
+            out_degree = ep.get("out_degree", 0)
             progress_callback and progress_callback(i, total, name)
 
             # Build start_id: repo_id:file_path:qualified_name format
@@ -687,7 +962,10 @@ def _generate_flows(
                 call_chain = svc.get_call_chain(repo_id, start_id, max_depth=6)
 
             # Build call tree text
-            tree_lines: list[str] = [f"- `{name}` (depth 0) — entry point in `{file_path}`"]
+            tree_lines: list[str] = [
+                f"- `{name}` (depth 0) — entry point in `{file_path}`"
+                + (f" [calls {out_degree} direct children]" if out_degree else "")
+            ]
             for step in call_chain:
                 indent = "  " * int(step.get("depth", 1))
                 tree_lines.append(
@@ -758,8 +1036,7 @@ def generate_docs(
         skip = None  # sentinel → _list_files uses _DEFAULT_SKIP_EXTENSIONS
     else:
         skip = frozenset(
-            (ext if ext.startswith(".") else f".{ext}").lower()
-            for ext in exclude_extensions
+            (ext if ext.startswith(".") else f".{ext}").lower() for ext in exclude_extensions
         )
 
     dispatch = {
@@ -776,7 +1053,10 @@ def generate_docs(
 
     logger.info(
         "docs_generator: repo=%s scope=%s style=%s language=%s skip_exts=%s",
-        repo_id, scope, style, language,
+        repo_id,
+        scope,
+        style,
+        language,
         sorted(skip) if skip is not None else "(defaults)",
     )
     return generator(svc, repo_id, style, language, llm, progress_callback, skip)
