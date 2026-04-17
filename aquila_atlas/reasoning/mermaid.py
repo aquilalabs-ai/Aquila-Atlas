@@ -96,12 +96,28 @@ def extract_mermaid_block(text: str) -> str:
         return m.group(1).strip()
 
     # 2. Plain ``` fence — accept if first word looks like a diagram type
-    _KNOWN_TYPES = frozenset({
-        "flowchart", "graph", "classdiagram", "sequencediagram", "erdiagram",
-        "statediagram", "statediagram-v2", "gantt", "gitgraph", "pie",
-        "mindmap", "timeline", "quadrantchart", "requirementdiagram",
-        "block-beta", "xychart-beta", "sankey-beta", "architecture-beta",
-    })
+    _KNOWN_TYPES = frozenset(
+        {
+            "flowchart",
+            "graph",
+            "classdiagram",
+            "sequencediagram",
+            "erdiagram",
+            "statediagram",
+            "statediagram-v2",
+            "gantt",
+            "gitgraph",
+            "pie",
+            "mindmap",
+            "timeline",
+            "quadrantchart",
+            "requirementdiagram",
+            "block-beta",
+            "xychart-beta",
+            "sankey-beta",
+            "architecture-beta",
+        }
+    )
     m = re.search(r"```[a-z-]*\s*\n(.*?)```", text, re.DOTALL)
     if m:
         candidate = m.group(1).strip()

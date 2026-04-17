@@ -61,7 +61,7 @@ class GitLogTool(BaseTool):
         logger.debug(
             "tool=git_log repo=%s branch=%r limit=%d file=%r", repo_id, branch, limit, file_path
         )
-        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415
+        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415, TC001
 
         svc = cast("KnowledgeService", self.service)
         kind, source, err = _resolve_repo_source(svc, repo_id)

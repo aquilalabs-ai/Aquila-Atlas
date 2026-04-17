@@ -17,13 +17,13 @@ def _make_plugin(config: LangConfig) -> LanguagePlugin:
         return LanguagePlugin(
             name=config.ts_name.replace("_", " ").title(),
             extensions=config.extensions,
-            parse_file=lambda src, path, cfg=config: parse_generic(src, path, cfg),
+            parse_file=lambda src, path, cfg=config: parse_generic(src, path, cfg),  # type: ignore[misc]
             resolve_import=resolver,
         )
     return LanguagePlugin(
         name=config.ts_name.replace("_", " ").title(),
         extensions=config.extensions,
-        parse_file=lambda src, path, cfg=config: parse_generic(src, path, cfg),
+        parse_file=lambda src, path, cfg=config: parse_generic(src, path, cfg),  # type: ignore[misc]
     )
 
 

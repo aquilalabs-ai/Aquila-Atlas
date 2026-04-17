@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage  # noqa: TC002
 from langgraph.graph.message import add_messages
 
 _RouteType = Literal["structural", "implementation", "analysis", "generation", "diagram", "direct"]

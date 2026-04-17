@@ -46,7 +46,7 @@ class KnowledgeService:
         """Return all repository IDs that have been ingested."""
         return self.vector.list_repo_ids()
 
-    def get_graph(self, repo_id: str) -> dict[str, list[dict[str, object]]]:
+    def get_graph(self, repo_id: str) -> dict[str, list[dict[str, Any]]]:
         """Return all graph nodes and edges for a repository (for visualisation)."""
         return self.graph.get_graph(repo_id)
 
@@ -60,7 +60,7 @@ class KnowledgeService:
         """Return all unique file paths ingested for *repo_id*."""
         return self.vector.list_files(repo_id)
 
-    def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, object]]:
+    def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, Any]]:
         """Return all chunk payloads for a specific file in *repo_id*."""
         return self.vector.get_file_chunks(repo_id, file_path)
 

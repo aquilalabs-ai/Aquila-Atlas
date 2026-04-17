@@ -58,6 +58,7 @@ class CodebaseAgent:
         extra_tools: list[BaseTool] | None = None,
     ) -> None:
         from langchain_openai import ChatOpenAI  # noqa: PLC0415
+        from pydantic import SecretStr  # noqa: PLC0415
 
         from aquila_atlas.config import get_settings  # noqa: PLC0415
 
@@ -74,7 +75,7 @@ class CodebaseAgent:
         self._compaction_llm = ChatOpenAI(
             model=s.llm_model,
             base_url=s.llm_base_url,
-            api_key=s.llm_api_key,
+            api_key=SecretStr(s.llm_api_key),
         )
 
     # ------------------------------------------------------------------
@@ -132,7 +133,8 @@ class CodebaseAgent:
         accumulated = ""
         for chunk, metadata in self._graph.stream(self._build_input(), stream_mode="messages"):
             if (
-                metadata.get("langgraph_node") == "reasoning"
+                isinstance(metadata, dict)
+                and metadata.get("langgraph_node") == "reasoning"
                 and isinstance(chunk, AIMessage)
                 and chunk.content
             ):
@@ -519,11 +521,9 @@ class CodebaseAgent:
     # ------------------------------------------------------------------
 
     def _build_input(self) -> dict[str, Any]:
-        from ._state import AgentState  # noqa: PLC0415
-
-        return AgentState(
-            messages=list(self._history),
-            repo_id=self._repo_id,
-            retrieved_context="",
-            route="implementation",
-        )
+        return {
+            "messages": list(self._history),
+            "repo_id": self._repo_id,
+            "retrieved_context": "",
+            "route": "implementation",
+        }

@@ -78,13 +78,10 @@ class FindCallersTool(BaseTool):
 
         callee_name = str(rows[0].get("callee_name", target))
         callee_file = str(rows[0].get("callee_file", ""))
-        parts = [
-            f"Callers of `{callee_name}` (in `{callee_file}`): {len(rows)} found\n"
-        ]
+        parts = [f"Callers of `{callee_name}` (in `{callee_file}`): {len(rows)} found\n"]
         for row in rows:
             kind = str(row.get("caller_kind", "?")).lower()
             parts.append(
-                f"  • [{kind}] {row.get('caller_name', '?')} "
-                f"in {row.get('caller_file', '?')}"
+                f"  • [{kind}] {row.get('caller_name', '?')} in {row.get('caller_file', '?')}"
             )
         return "\n".join(parts)

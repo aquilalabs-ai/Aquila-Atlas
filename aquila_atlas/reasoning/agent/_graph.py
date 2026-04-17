@@ -32,6 +32,7 @@ def build_graph(
     from langchain_openai import ChatOpenAI  # noqa: PLC0415
     from langgraph.graph import START, StateGraph  # noqa: PLC0415
     from langgraph.prebuilt import ToolNode, tools_condition  # noqa: PLC0415
+    from pydantic import SecretStr  # noqa: PLC0415
 
     from aquila_atlas.reasoning.tools import get_tools as get_knowledge_tools  # noqa: PLC0415
 
@@ -41,7 +42,7 @@ def build_graph(
     llm = ChatOpenAI(
         model=settings.llm_model,
         base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
+        api_key=SecretStr(settings.llm_api_key),
         streaming=True,
         stream_usage=True,  # include usage metadata in the final streaming chunk
     )
@@ -62,11 +63,7 @@ def build_graph(
         # ToolMessages from previous session turns don't inflate the count.
         messages_list = state["messages"]
         last_human_idx = next(
-            (
-                i
-                for i, m in reversed(list(enumerate(messages_list)))
-                if isinstance(m, HumanMessage)
-            ),
+            (i for i, m in reversed(list(enumerate(messages_list))) if isinstance(m, HumanMessage)),
             0,
         )
         tool_call_count = sum(
@@ -75,6 +72,7 @@ def build_graph(
         # Hard-stop: after 5 tool results, switch to bare LLM so tools_condition
         # sees no tool_calls and exits the graph immediately.  This prevents the
         # recursion limit from being reached on broad structural questions.
+        active_llm: Any
         if state.get("route") == "direct" or tool_call_count >= 5:
             active_llm = llm
         else:

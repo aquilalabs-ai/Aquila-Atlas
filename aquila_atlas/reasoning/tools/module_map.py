@@ -84,8 +84,8 @@ class ModuleMapTool(BaseTool):
         for row in entity_rows:
             fp = str(row.get("path", ""))
             kind = str(row.get("kind", ""))
-            entity_counts.setdefault(fp, {})[kind] = (
-                entity_counts.get(fp, {}).get(kind, 0) + int(row.get("cnt", 0))
+            entity_counts.setdefault(fp, {})[kind] = entity_counts.get(fp, {}).get(kind, 0) + int(
+                row.get("cnt", 0)
             )
 
         # ── 3. Group by top-level directory ───────────────────────────────

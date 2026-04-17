@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool  # noqa: TC002
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger("aquila.reasoning")
@@ -37,10 +37,7 @@ class _McpCypherWrapper(BaseTool):
     async def _arun(self, query: str) -> str:
         result = str(await self.mcp_tool.ainvoke({"query": query}))
         if len(result) > self._MAX_OUTPUT_CHARS:
-            result = (
-                result[: self._MAX_OUTPUT_CHARS]
-                + f"\n[truncated — {len(result)} chars total]"
-            )
+            result = result[: self._MAX_OUTPUT_CHARS] + f"\n[truncated — {len(result)} chars total]"
         return result
 
     def _run(self, query: str) -> str:

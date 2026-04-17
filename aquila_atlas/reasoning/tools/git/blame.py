@@ -58,7 +58,7 @@ class GitBlameTool(BaseTool):
             start_line,
             end_line,
         )
-        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415
+        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415, TC001
 
         svc = cast("KnowledgeService", self.service)
         kind, source, err = _resolve_repo_source(svc, repo_id)

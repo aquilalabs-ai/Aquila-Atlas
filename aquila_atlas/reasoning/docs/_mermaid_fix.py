@@ -28,7 +28,7 @@ _UNQUOTED_SQUARE_RE = re.compile(r'\[([^\[\]"]*[()][^\[\]"]*)\]')
 # Already-quoted labels that still contain parens: ["foo()"] or ["foo (bar)"]
 _QUOTED_LABEL_RE = re.compile(r'(\[")([^"]*[()][^"]*)("\])')
 # Stadium nodes whose label contains nested parens: A(foo(bar)) or A(foo())
-_STADIUM_NESTED_RE = re.compile(r'(\w[\w.\-]*)(\()([^()]*\([^()]*\)[^()]*|[^()]*\(\)[^()]*)\)')
+_STADIUM_NESTED_RE = re.compile(r"(\w[\w.\-]*)(\()([^()]*\([^()]*\)[^()]*|[^()]*\(\)[^()]*)\)")
 
 
 def _sanitize_mermaid(diagram: str) -> str:
@@ -52,7 +52,7 @@ def _sanitize_mermaid(diagram: str) -> str:
     # 3. Quoted labels: ["any (text) here"] → ["any text here"]
     def _clean_quoted(m: re.Match[str]) -> str:
         inner = m.group(2).replace("(", "").replace(")", "")
-        return f'{m.group(1)}{inner}{m.group(3)}'
+        return f"{m.group(1)}{inner}{m.group(3)}"
 
     diagram = _QUOTED_LABEL_RE.sub(_clean_quoted, diagram)
 
@@ -84,9 +84,7 @@ def _fix_mermaid_blocks(content: str, llm: Any) -> str:
             errors = validate_with_node(diagram)
             if not errors:
                 return diagram
-            logger.info(
-                "docs_generator: mermaid fix attempt %d — errors: %s", attempt + 1, errors
-            )
+            logger.info("docs_generator: mermaid fix attempt %d — errors: %s", attempt + 1, errors)
             fix_prompt = _MERMAID_FIX_PROMPT.replace("{errors}", "\n".join(errors)).replace(
                 "{diagram}", diagram
             )

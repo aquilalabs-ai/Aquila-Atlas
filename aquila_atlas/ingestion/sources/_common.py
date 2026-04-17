@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from aquila_atlas.ingestion.metadata import SourceMetadata
-
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from aquila_atlas.ingestion.metadata import SourceMetadata
 
 # ---------------------------------------------------------------------------
 # Language detection

@@ -59,5 +59,8 @@ class FileReaderTool(BaseTool):
         body = "\n\n---\n\n".join(sections)
         result = header + body
         if len(result) > self._MAX_OUTPUT_CHARS:
-            result = result[: self._MAX_OUTPUT_CHARS] + f"\n\n[truncated — {len(chunks)} chunks total, showing first {self._MAX_OUTPUT_CHARS} chars]"
+            result = (
+                result[: self._MAX_OUTPUT_CHARS]
+                + f"\n\n[truncated — {len(chunks)} chunks total, showing first {self._MAX_OUTPUT_CHARS} chars]"
+            )
         return result

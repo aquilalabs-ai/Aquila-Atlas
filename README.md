@@ -241,6 +241,7 @@ Start the frontend:
 ```bash
 cd frontend
 npm install
+npm cache verify
 npm run dev          # http://localhost:5173
 ```
 
@@ -361,8 +362,8 @@ Diagram generation uses a **generate → validate → retry** loop (up to 5 atte
 ## Running Tests
 
 ```bash
-uv run ruff check .           # lint
-uv run ruff format .          # format
-uv run mypy aquila_atlas/     # type check
-uv run pytest                 # all tests
+uv run ruff check .                     # lint
+uv run ruff format .                    # format
+uv run python -m mypy aquila_atlas      # type check
+uv run python -m pytest                 # all tests
 ```

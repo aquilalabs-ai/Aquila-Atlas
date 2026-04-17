@@ -71,21 +71,29 @@ _doc_jobs: dict[str, DocJobRecord] = {}
 
 _SCOPE_LABELS: dict[str, str] = {
     "architecture": "Architecture",
-    "per_module":   "Per Module",
-    "per_file":     "Per File",
-    "subsystem":    "Subsystem",
-    "flows":        "Flows",
+    "per_module": "Per Module",
+    "per_file": "Per File",
+    "subsystem": "Subsystem",
+    "flows": "Flows",
 }
 _STYLE_LABELS: dict[str, str] = {
-    "technical":  "Technical",
+    "technical": "Technical",
     "functional": "Functional",
 }
 _LANG_LABELS: dict[str, str] = {
-    "en": "EN", "fr": "FR", "es": "ES", "de": "DE",
-    "zh": "ZH", "ja": "JA", "pt": "PT", "ar": "AR",
+    "en": "EN",
+    "fr": "FR",
+    "es": "ES",
+    "de": "DE",
+    "zh": "ZH",
+    "ja": "JA",
+    "pt": "PT",
+    "ar": "AR",
 }
 
-_PDF_SCRIPT = Path(__file__).parent.parent.parent.parent / "frontend" / "scripts" / "generate-pdf.cjs"
+_PDF_SCRIPT = (
+    Path(__file__).parent.parent.parent.parent / "frontend" / "scripts" / "generate-pdf.cjs"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +183,17 @@ async def _run_doc_job(job_id: str, svc: object, doc_store: object) -> None:
 
 def _resolve_doc_files(
     job_id: str, repo_id: str, request: Request
-) -> tuple[dict[str, str], "DocJobRecord | None"]:
+) -> tuple[dict[str, str], DocJobRecord | None]:
     """Return (files, record) from memory or DB; files is empty if not found/ready."""
     record = _doc_jobs.get(job_id)
-    if record is not None and record.repo_id == repo_id and record.status == "done":
-        if record.files:
-            return record.files, record
-        # Files were cleared after DB persist; fall through to DB but keep record for metadata
+    if (
+        record is not None
+        and record.repo_id == repo_id
+        and record.status == "done"
+        and record.files
+    ):
+        return record.files, record
+    # If record exists but files were cleared after DB persist, fall through to DB for content
     doc_store = getattr(request.app.state, "doc_store", None)
     if doc_store is not None:
         from aquila_atlas.api.store import DocStore  # noqa: PLC0415
@@ -386,7 +398,7 @@ async def download_doc_pdf(
 
     scope_label = _SCOPE_LABELS.get(scope, scope.title())
     style_label = _STYLE_LABELS.get(style, style.title())
-    lang_label  = _LANG_LABELS.get(language, language.upper())
+    lang_label = _LANG_LABELS.get(language, language.upper())
 
     title_block = (
         f"# Documentation: {scope_label} — {lang_label} — {style_label}\n\n"

@@ -33,7 +33,7 @@ class GitStatusTool(BaseTool):
 
     def _run(self, repo_id: str) -> str:
         logger.debug("tool=git_status repo=%s", repo_id)
-        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415
+        from aquila_atlas.knowledge.service import KnowledgeService  # noqa: PLC0415, TC001
 
         svc = cast("KnowledgeService", self.service)
         kind, source, err = _resolve_repo_source(svc, repo_id)
@@ -66,15 +66,13 @@ class GitStatusTool(BaseTool):
         open_issues = repo_data.get("open_issues_count", 0)
 
         # Latest commit on default branch
-        commit_data, _ = _gh_get(
-            f"/repos/{owner}/{repo}/commits/{default_branch}", token
-        )
+        commit_data, _ = _gh_get(f"/repos/{owner}/{repo}/commits/{default_branch}", token)
         latest = ""
         if isinstance(commit_data, dict):
             sha = str(commit_data.get("sha", ""))[:7]
             info = commit_data.get("commit", {})
             msg = str(info.get("message", "")).splitlines()[0]
-            author = (info.get("author") or {})
+            author = info.get("author") or {}
             name = str(author.get("name", ""))
             date = str(author.get("date", ""))[:10]
             latest = f"\nLatest commit on {default_branch}: {sha}  {date}  {name}  {msg}"

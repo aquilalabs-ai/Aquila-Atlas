@@ -86,7 +86,7 @@ def _generate_per_file(
         logger.info(
             "docs_generator: per_file cancelled — returning %d/%d files", len(result), total
         )
-        raise GenerationCancelled(result)
+        raise GenerationCancelled(result) from None
 
     progress_callback and progress_callback(total, total, None)
     return result

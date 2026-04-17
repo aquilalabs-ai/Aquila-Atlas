@@ -5,7 +5,7 @@ from __future__ import annotations
 import re as _re
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aquila_atlas.knowledge.service import KnowledgeService
@@ -17,9 +17,7 @@ _GH_REPO_RE = _re.compile(
 )
 
 
-def _resolve_repo_source(
-    svc: KnowledgeService, repo_id: str
-) -> tuple[str, Any, str | None]:
+def _resolve_repo_source(svc: KnowledgeService, repo_id: str) -> tuple[str, Any, str | None]:
     """Resolve *repo_id* to its ingested source.
 
     Returns one of:
@@ -28,7 +26,7 @@ def _resolve_repo_source(
     - ``("error", None, message)``— unusable source with a human-readable reason
     """
     try:
-        rows = cast("KnowledgeService", svc).graph.cypher_read(
+        rows = svc.graph.cypher_read(
             "MATCH (r:Repository {id: $repo_id}) RETURN r.label AS label",
             params={"repo_id": repo_id},
         )
@@ -36,9 +34,13 @@ def _resolve_repo_source(
         return "error", None, f"Could not look up repo '{repo_id}': {exc}"
 
     if not rows:
-        return "error", None, (
-            f"Repository '{repo_id}' not found. Has it been ingested yet? "
-            "Run 'uv run aquila repos' to list available repositories."
+        return (
+            "error",
+            None,
+            (
+                f"Repository '{repo_id}' not found. Has it been ingested yet? "
+                "Run 'uv run aquila repos' to list available repositories."
+            ),
         )
 
     label = str(rows[0].get("label") or "")
@@ -51,17 +53,25 @@ def _resolve_repo_source(
 
     # Other remote URLs (GitLab, Bitbucket, raw git…) — no API support yet
     if label.startswith(("https://", "http://", "git@", "ssh://")):
-        return "error", None, (
-            f"Repository '{repo_id}' was ingested from a remote URL ({label}). "
-            "Only GitHub and local git repositories are supported by the git tools."
+        return (
+            "error",
+            None,
+            (
+                f"Repository '{repo_id}' was ingested from a remote URL ({label}). "
+                "Only GitHub and local git repositories are supported by the git tools."
+            ),
         )
 
     # Local path
     path = Path(label)
     if not path.exists():
-        return "error", None, (
-            f"Source directory '{label}' no longer exists on disk. "
-            "The repository may have been moved or deleted since ingestion."
+        return (
+            "error",
+            None,
+            (
+                f"Source directory '{label}' no longer exists on disk. "
+                "The repository may have been moved or deleted since ingestion."
+            ),
         )
 
     try:
@@ -77,9 +87,13 @@ def _resolve_repo_source(
         return "error", None, "git command timed out while detecting repository root."
 
     if result.returncode != 0:
-        return "error", None, (
-            f"'{label}' is not a git repository (no .git found). "
-            "Git tools require the source folder to be initialised with git."
+        return (
+            "error",
+            None,
+            (
+                f"'{label}' is not a git repository (no .git found). "
+                "Git tools require the source folder to be initialised with git."
+            ),
         )
 
     return "local", path, None
@@ -98,7 +112,9 @@ def _run_git(path: Path, args: list[str], timeout: int = 30) -> tuple[str, str |
             return "", result.stderr.strip() or f"git exited with code {result.returncode}"
         out = result.stdout
         if len(out) > _GIT_MAX_OUTPUT:
-            out = out[:_GIT_MAX_OUTPUT] + f"\n\n[truncated — output exceeds {_GIT_MAX_OUTPUT} chars]"
+            out = (
+                out[:_GIT_MAX_OUTPUT] + f"\n\n[truncated — output exceeds {_GIT_MAX_OUTPUT} chars]"
+            )
         return out, None
     except subprocess.TimeoutExpired:
         return "", "git command timed out."
@@ -122,9 +138,7 @@ def _gh_get(path: str, token: str = "") -> tuple[Any, str | None]:
 
     try:
         with httpx.Client(timeout=20) as client:
-            resp = client.get(
-                f"https://api.github.com{path}", headers=_gh_headers(token)
-            )
+            resp = client.get(f"https://api.github.com{path}", headers=_gh_headers(token))
             if resp.status_code == 404:
                 hint = (
                     " If this is a private repository, set GITHUB_TOKEN in .env with"

@@ -19,17 +19,40 @@ logger = logging.getLogger("aquila.docs_generator")
 
 # Name prefixes that signal an important orchestration/entry function
 _ENTRY_NAME_PREFIXES: tuple[str, ...] = (
-    "main", "run", "start", "execute", "process", "handle",
-    "dispatch", "serve", "launch", "init", "setup", "bootstrap",
-    "invoke", "cli", "command",
+    "main",
+    "run",
+    "start",
+    "execute",
+    "process",
+    "handle",
+    "dispatch",
+    "serve",
+    "launch",
+    "init",
+    "setup",
+    "bootstrap",
+    "invoke",
+    "cli",
+    "command",
 )
 
 # File stems that are strong signals for top-level entry points
 _ENTRY_FILE_STEMS: frozenset[str] = frozenset(
     {
-        "__main__", "main", "cli", "app", "server", "run",
-        "manage", "wsgi", "asgi", "entrypoint", "entry_point",
-        "start", "bootstrap", "launcher",
+        "__main__",
+        "main",
+        "cli",
+        "app",
+        "server",
+        "run",
+        "manage",
+        "wsgi",
+        "asgi",
+        "entrypoint",
+        "entry_point",
+        "start",
+        "bootstrap",
+        "launcher",
     }
 )
 
@@ -195,7 +218,7 @@ def _generate_flows(
             result[f"flows/{doc_dir}/{safe_func}.md"] = content
     except GenerationCancelled:
         logger.info("docs_generator: flows cancelled — returning %d/%d flows", len(result), total)
-        raise GenerationCancelled(result)
+        raise GenerationCancelled(result) from None
 
     progress_callback and progress_callback(total, total, None)
     return result

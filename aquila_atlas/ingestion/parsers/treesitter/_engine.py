@@ -41,7 +41,7 @@ def _get_parser(ts_name: str) -> Any:
     if ts_name not in _PARSER_CACHE:
         from tree_sitter_language_pack import get_parser  # noqa: PLC0415
 
-        _PARSER_CACHE[ts_name] = get_parser(ts_name)
+        _PARSER_CACHE[ts_name] = get_parser(ts_name)  # type: ignore[arg-type]
     return _PARSER_CACHE[ts_name]
 
 

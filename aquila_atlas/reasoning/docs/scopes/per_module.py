@@ -10,7 +10,13 @@ if TYPE_CHECKING:
 
     from aquila_atlas.knowledge.service import KnowledgeService
 
-from .._helpers import _extract_summary, _list_files, _list_modules, _search_context, _topological_sort
+from .._helpers import (
+    _extract_summary,
+    _list_files,
+    _list_modules,
+    _search_context,
+    _topological_sort,
+)
 from .._prompts import _LANGUAGE_NAMES, _PROMPT_PER_MODULE, _STYLE_DESC, _apply_template
 from ..generator import GenerationCancelled
 
@@ -79,7 +85,7 @@ def _generate_per_module(
         logger.info(
             "docs_generator: per_module cancelled — returning %d/%d modules", len(result), total
         )
-        raise GenerationCancelled(result)
+        raise GenerationCancelled(result) from None
 
     progress_callback and progress_callback(total, total, None)
     return result

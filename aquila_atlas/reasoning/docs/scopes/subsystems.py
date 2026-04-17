@@ -69,7 +69,7 @@ def _generate_subsystems(
         logger.info(
             "docs_generator: subsystem cancelled — returning %d/%d subsystems", len(result), total
         )
-        raise GenerationCancelled(result)
+        raise GenerationCancelled(result) from None
 
     progress_callback and progress_callback(total, total, None)
     return result

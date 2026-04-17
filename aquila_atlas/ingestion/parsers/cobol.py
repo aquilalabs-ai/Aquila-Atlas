@@ -63,9 +63,9 @@ class _Division:
 class _DataRecord:
     name: str
     section_name: str  # WORKING-STORAGE, FILE, LINKAGE, LOCAL-STORAGE, …
-    start_line: int    # 1-based
+    start_line: int  # 1-based
     end_line: int = 0
-    pic: str = ""      # PIC clause value if elementary item
+    pic: str = ""  # PIC clause value if elementary item
 
 
 @dataclass
@@ -89,7 +89,9 @@ class _ParsedCobol:
     paragraphs: list[_Paragraph] = field(default_factory=list)
     data_records: list[_DataRecord] = field(default_factory=list)
     copy_references: list[str] = field(default_factory=list)
-    lines: list[str] = field(default_factory=list)   # normalised (seq stripped, continuations joined)
+    lines: list[str] = field(
+        default_factory=list
+    )  # normalised (seq stripped, continuations joined)
     raw_lines: list[str] = field(default_factory=list)
 
 
@@ -252,15 +254,15 @@ def _extract_identification_metadata(parsed: _ParsedCobol) -> None:
         return
 
     lines = parsed.lines
-    start = id_div.start_line      # 0-based index into lines
+    start = id_div.start_line  # 0-based index into lines
     end = min(id_div.end_line - 1, len(lines))
 
     meta_map: dict[str, re.Pattern[str]] = {
-        "author":       re.compile(r"^\s*AUTHOR\.?\s*(.*)", re.IGNORECASE),
+        "author": re.compile(r"^\s*AUTHOR\.?\s*(.*)", re.IGNORECASE),
         "date_written": re.compile(r"^\s*DATE-WRITTEN\.?\s*(.*)", re.IGNORECASE),
         "date_compiled": re.compile(r"^\s*DATE-COMPILED\.?\s*(.*)", re.IGNORECASE),
         "installation": re.compile(r"^\s*INSTALLATION\.?\s*(.*)", re.IGNORECASE),
-        "security":     re.compile(r"^\s*SECURITY\.?\s*(.*)", re.IGNORECASE),
+        "security": re.compile(r"^\s*SECURITY\.?\s*(.*)", re.IGNORECASE),
     }
 
     for i in range(start, end):
@@ -287,17 +289,13 @@ def _extract_sections(parsed: _ParsedCobol) -> None:
     if not proc_div:
         return
 
-    proc_start = proc_div.start_line      # 0-based index
-    proc_end = proc_div.end_line - 1      # exclusive 0-based
+    proc_start = proc_div.start_line  # 0-based index
+    proc_end = proc_div.end_line - 1  # exclusive 0-based
 
     if parsed.has_sequence_numbers:
-        sect_re = re.compile(
-            r"^[ \t]{1,4}([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$", re.IGNORECASE
-        )
+        sect_re = re.compile(r"^[ \t]{1,4}([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$", re.IGNORECASE)
     else:
-        sect_re = re.compile(
-            r"^[ \t]{1,10}([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$", re.IGNORECASE
-        )
+        sect_re = re.compile(r"^[ \t]{1,10}([A-Z0-9][A-Z0-9-]*)\s+SECTION\s*\.\s*$", re.IGNORECASE)
 
     decl_re = re.compile(r"^\s*DECLARATIVES\s*\.\s*$", re.IGNORECASE)
 
@@ -337,7 +335,7 @@ def _extract_data_records(parsed: _ParsedCobol) -> None:
         return
 
     lines = parsed.lines
-    start = data_div.start_line       # 0-based index
+    start = data_div.start_line  # 0-based index
     end = min(data_div.end_line - 1, len(lines))
 
     section_pat = re.compile(
@@ -420,15 +418,32 @@ _CICS_START_RE = re.compile(
 _NOT_PARA_KEYWORDS: frozenset[str] = frozenset(
     {
         # Division / section headers and structural keywords
-        "DIVISION", "SECTION", "DECLARATIVES", "END-DECLARATIVES",
-        "IDENTIFICATION", "ENVIRONMENT", "DATA", "PROCEDURE",
+        "DIVISION",
+        "SECTION",
+        "DECLARATIVES",
+        "END-DECLARATIVES",
+        "IDENTIFICATION",
+        "ENVIRONMENT",
+        "DATA",
+        "PROCEDURE",
         # DATA DIVISION section names
-        "FILE", "LINKAGE", "WORKING-STORAGE", "LOCAL-STORAGE",
-        "REPORT", "SCREEN", "COMMUNICATION",
+        "FILE",
+        "LINKAGE",
+        "WORKING-STORAGE",
+        "LOCAL-STORAGE",
+        "REPORT",
+        "SCREEN",
+        "COMMUNICATION",
         # Common paragraph-body terminators that appear alone on a line
-        "END", "EXIT", "STOP", "GOBACK",
+        "END",
+        "EXIT",
+        "STOP",
+        "GOBACK",
         # COBOL OO constructs (COBOL 2002+)
-        "CLASS-ID", "INTERFACE-ID", "METHOD-ID", "FACTORY",
+        "CLASS-ID",
+        "INTERFACE-ID",
+        "METHOD-ID",
+        "FACTORY",
     }
 )
 
@@ -780,7 +795,7 @@ def _extract_cobol_calls(entities: list[CodeEntity]) -> list[tuple[str, str, str
         if entity.docstring and "PERFORMS:" in entity.docstring:
             for line in entity.docstring.splitlines():
                 if line.startswith("PERFORMS:"):
-                    targets_str = line[len("PERFORMS:"):].strip()
+                    targets_str = line[len("PERFORMS:") :].strip()
                     for target in targets_str.split(","):
                         target = target.strip()
                         if target:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import zipfile
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aquila_atlas.ingestion.metadata import SourceMetadata
@@ -12,6 +11,7 @@ from aquila_atlas.ingestion.sources._common import RawFile, _should_ignore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 class ZipLoader:

@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from ._prompts import _ROUTER_PROMPT, _SKILL_MAP, _SYSTEM_PROMPT_BASE
-from ._state import AgentState
+from ._state import AgentState  # noqa: TC001
 
 logger = logging.getLogger("aquila.reasoning")
 
+
 if TYPE_CHECKING:
     from aquila_atlas.knowledge.service import KnowledgeService
+
+    from ._state import _RouteType
 
 
 def _msg_text(content: Any) -> str:
@@ -31,8 +34,6 @@ def _msg_text(content: Any) -> str:
 
 def _router_node(state: AgentState, llm: Any) -> dict[str, Any]:
     """Classify the query as 'retrieval' or 'direct'."""
-    from ._state import _RouteType  # noqa: PLC0415
-
     last_human = next(
         (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
         None,
@@ -163,9 +164,7 @@ async def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
         (i for i, m in reversed(list(enumerate(messages_list))) if isinstance(m, HumanMessage)),
         0,
     )
-    tool_call_count = sum(
-        1 for m in messages_list[last_human_idx:] if isinstance(m, ToolMessage)
-    )
+    tool_call_count = sum(1 for m in messages_list[last_human_idx:] if isinstance(m, ToolMessage))
     if tool_call_count >= 5:
         logger.warning(
             "agent[reasoning] %d tool calls detected — injecting stop-loop instruction",
@@ -177,7 +176,7 @@ async def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
             "write a complete, final answer for the user right now."
         )
 
-    messages: list = [SystemMessage(content=system_content), *messages_list]
+    messages: list[Any] = [SystemMessage(content=system_content), *messages_list]
     logger.debug(
         "agent[reasoning] prompt messages=%d system_len=%d tool_calls_so_far=%d",
         len(messages),
