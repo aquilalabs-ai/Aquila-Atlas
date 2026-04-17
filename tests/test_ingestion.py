@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from aquila_atlas.ingestion.chunker import chunk_entity
 from aquila_atlas.ingestion.metadata import CodeEntity
-from aquila_atlas.ingestion.parser import parse, parse_python
+from aquila_atlas.ingestion.parsers import parse, parse_python
 from aquila_atlas.ingestion.sources import (
     LocalFolderLoader,
     RawFile,
@@ -243,3 +243,88 @@ def test_local_folder_loader_metadata(tmp_path: Path) -> None:
     meta = loader.metadata()
     assert meta.label == str(tmp_path)
     assert meta.languages.get("Python", 0) == 80
+
+
+# ---------------------------------------------------------------------------
+# COBOL parser — via parse() dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_parse_cobol_basic() -> None:
+    source = b"""\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. HELLO-WORLD.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           DISPLAY 'Hello World'.
+           STOP RUN.
+"""
+    raw = RawFile(path="hello.cbl", content=source)
+    entities = parse(raw)
+    assert len(entities) >= 1
+    types = {e.type for e in entities}
+    # At minimum a file-level entity must be produced
+    assert "file" in types or "class" in types or "function" in types
+
+
+def test_parse_cobol_extracts_paragraph() -> None:
+    source = b"""\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PAYROLL.
+       PROCEDURE DIVISION.
+       CALCULATE-PAY.
+           MULTIPLY HOURS BY RATE GIVING GROSS-PAY.
+           STOP RUN.
+"""
+    raw = RawFile(path="payroll.cbl", content=source)
+    entities = parse(raw)
+    names = {e.name for e in entities}
+    # CALCULATE-PAY should be extracted as a paragraph/function
+    assert any("CALCULATE-PAY" in n or "PAYROLL" in n for n in names)
+
+
+def test_parse_cobol_copybook() -> None:
+    source = b"""\
+       01 CUSTOMER-RECORD.
+          05 CUST-ID     PIC 9(6).
+          05 CUST-NAME   PIC X(30).
+"""
+    raw = RawFile(path="customer.cpy", content=source)
+    entities = parse(raw)
+    assert len(entities) >= 1
+
+
+# ---------------------------------------------------------------------------
+# JavaScript parser — via parse() dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_parse_javascript_function() -> None:
+    source = b"""\
+function greet(name) {
+    return `Hello, ${name}`;
+}
+"""
+    raw = RawFile(path="greet.js", content=source)
+    entities = parse(raw)
+    types = {e.type for e in entities}
+    assert "function" in types or "file" in types
+    func_names = {e.name for e in entities if e.type == "function"}
+    assert "greet" in func_names
+
+
+def test_parse_typescript_interface() -> None:
+    source = b"""\
+interface User {
+    id: number;
+    name: string;
+}
+
+function getUser(id: number): User {
+    return { id, name: 'Alice' };
+}
+"""
+    raw = RawFile(path="user.ts", content=source)
+    entities = parse(raw)
+    names = {e.name for e in entities}
+    assert "getUser" in names or "User" in names

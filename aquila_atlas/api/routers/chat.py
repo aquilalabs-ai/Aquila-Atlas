@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -13,8 +14,7 @@ from fastapi.responses import StreamingResponse
 from aquila_atlas.api.deps import Auth, SessionMeta, Sessions, Store, Svc  # noqa: TC001
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-    from typing import Any
+    from collections.abc import AsyncIterator, Coroutine
 
     from langchain_core.tools import BaseTool
 from aquila_atlas.api.models import (
@@ -234,19 +234,60 @@ async def chat(
     if req.stream:
 
         async def _token_stream() -> AsyncIterator[str]:
+            import logging  # noqa: PLC0415
+
+            log = logging.getLogger("aquila.api")
             input_tokens = 0
             output_tokens = 0
-            async for event in agent.astream_with_status(req.message):
-                if event.get("status"):
-                    yield f"data: {json.dumps({'status': event['status'], 'session_id': session_id})}\n\n"
-                if event.get("token"):
-                    yield f"data: {json.dumps({'token': event['token'], 'session_id': session_id})}\n\n"
-                if event.get("input_tokens") is not None:
-                    input_tokens = event["input_tokens"]
-                if event.get("output_tokens") is not None:
-                    output_tokens = event["output_tokens"]
+
+            # Merge the agent stream with a periodic keepalive so long-running
+            # tool calls (e.g. generate_mermaid with multiple LLM retries) don't
+            # cause the browser to drop the SSE connection due to inactivity.
+            _KEEPALIVE_INTERVAL = 20.0  # seconds between SSE comment pings
+
+            agent_iter = agent.astream_with_status(req.message).__aiter__()
+            next_event: asyncio.Task[Any] | None = None
+
+            try:
+                next_event = asyncio.create_task(
+                    cast("Coroutine[Any, Any, Any]", agent_iter.__anext__())
+                )
+                while True:
+                    done, _ = await asyncio.wait({next_event}, timeout=_KEEPALIVE_INTERVAL)
+                    if not done:
+                        # No event yet — send an SSE comment to keep the connection alive.
+                        yield ": ping\n\n"
+                        continue
+
+                    try:
+                        event = next_event.result()
+                    except StopAsyncIteration:
+                        break
+
+                    if event.get("status"):
+                        yield f"data: {json.dumps({'status': event['status'], 'session_id': session_id})}\n\n"
+                    if event.get("token"):
+                        yield f"data: {json.dumps({'token': event['token'], 'session_id': session_id})}\n\n"
+                    if event.get("input_tokens") is not None:
+                        input_tokens = event["input_tokens"]
+                    if event.get("output_tokens") is not None:
+                        output_tokens = event["output_tokens"]
+
+                    next_event = asyncio.create_task(
+                        cast("Coroutine[Any, Any, Any]", agent_iter.__anext__())
+                    )
+
+            except asyncio.CancelledError:
+                log.info("SSE stream cancelled for session=%s (client disconnected)", session_id)
+                if next_event is not None and not next_event.done():
+                    next_event.cancel()
+                return
+            finally:
+                if next_event is not None and not next_event.done():
+                    next_event.cancel()
+
             meta["message_count"] += 1
-            # Persist history + metadata to Valkey after every completed turn
+            # Persist history + metadata after every completed turn.
             if store is not None:
                 store.save_history(session_id, agent.get_history())
                 store.save_meta(session_id, meta)

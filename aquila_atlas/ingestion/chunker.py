@@ -151,7 +151,7 @@ def chunk_files(
     For each file, a file-level summary chunk is emitted first, followed by
     one or more chunks per parsed entity (function, class, method).
     """
-    from aquila_atlas.ingestion.parser import parse
+    from aquila_atlas.ingestion.parsers import parse
 
     for file in files:
         entities = parse(file)

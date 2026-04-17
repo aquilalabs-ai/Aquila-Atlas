@@ -348,7 +348,7 @@ class VectorStore:
 
         return sorted(file_paths)
 
-    def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, object]]:
+    def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, Any]]:
         """Return all chunk payloads for a specific file, ordered by start_line."""
         collections = {c.name for c in self._client.get_collections().collections}
         if COLLECTION_NAME not in collections:
@@ -362,7 +362,7 @@ class VectorStore:
                 FieldCondition(key="file_path", match=MatchValue(value=file_path)),
             ]
         )
-        chunks: list[dict[str, object]] = []
+        chunks: list[dict[str, Any]] = []
         offset = None
         while True:
             result, next_offset = self._client.scroll(

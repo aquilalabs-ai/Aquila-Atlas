@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { User, Bot, Copy, Check, FileCode2, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
@@ -283,6 +284,36 @@ function CodeBlock({ language, children, isStreaming }: { language: string; chil
 }
 
 // ---------------------------------------------------------------------------
+// Copy button — copies raw markdown text of an AI message
+// ---------------------------------------------------------------------------
+
+function CopyButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false)
+
+  function copy() {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2_000)
+    })
+  }
+
+  return (
+    <button
+      onClick={copy}
+      title="Copy response"
+      className="flex items-center gap-1.5 text-xs text-fg-subtle transition-colors hover:text-fg-default"
+    >
+      {copied ? (
+        <Check className="h-3 w-3 text-success-fg" />
+      ) : (
+        <Copy className="h-3 w-3" />
+      )}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Message bubble
 // ---------------------------------------------------------------------------
 
@@ -361,23 +392,26 @@ export const MessageBubble = memo(function MessageBubble({ message, repoId, isLa
                 <span>{message.status}</span>
               </div>
             )}
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-              {message.content || (message.isStreaming ? '' : '')}
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
+              {message.content || ''}
             </ReactMarkdown>
             {!message.isStreaming && (message.inputTokens !== undefined && message.outputTokens !== undefined) && (
               <div className="mt-2 flex items-center gap-2 text-xs text-fg-subtle">
                 <span>Tokens: {message.inputTokens} in / {message.outputTokens} out</span>
               </div>
             )}
-            {!message.isStreaming && isLast && onRegenerate && (
-              <div className="mt-2">
-                <button
-                  onClick={onRegenerate}
-                  className="flex items-center gap-1.5 text-xs text-fg-subtle transition-colors hover:text-fg-default"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  Regenerate
-                </button>
+            {!message.isStreaming && (
+              <div className="mt-2 flex items-center gap-3">
+                <CopyButton content={message.content} />
+                {isLast && onRegenerate && (
+                  <button
+                    onClick={onRegenerate}
+                    className="flex items-center gap-1.5 text-xs text-fg-subtle transition-colors hover:text-fg-default"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Regenerate
+                  </button>
+                )}
               </div>
             )}
             {message.isStreaming && (

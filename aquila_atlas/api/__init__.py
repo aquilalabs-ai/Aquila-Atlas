@@ -41,7 +41,7 @@ from fastapi.openapi.utils import get_openapi
 from aquila_atlas.api.routers import chat, docs, files, graph, health, ingestion, repos, search
 
 if TYPE_CHECKING:
-    from aquila_atlas.reasoning.agent import CodebaseAgent
+    from aquila_atlas.reasoning.agent import CodebaseAgent as CodebaseAgent
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +62,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     from aquila_atlas.api.store import create_store  # noqa: PLC0415
 
     app.state.svc = get_knowledge_service()
-    app.state.sessions: dict[str, CodebaseAgent] = {}
-    app.state.session_meta: dict[str, dict] = {}  # session_id → metadata (title, created_at, …)
+    app.state.sessions = {}
+    app.state.session_meta = {}  # session_id → metadata (title, created_at, …)
 
     # Session store — persists chat history across restarts
     try:

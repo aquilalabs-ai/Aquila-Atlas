@@ -401,7 +401,7 @@ class GraphStore:
             )
             return [dict(record["importer"]) for record in result]
 
-    def get_graph(self, repo_id: str) -> dict[str, list[dict[str, object]]]:
+    def get_graph(self, repo_id: str) -> dict[str, list[dict[str, Any]]]:
         """Return all nodes and edges for a repository (for visualisation).
 
         Returns a dict with two keys:

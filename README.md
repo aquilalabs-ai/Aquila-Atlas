@@ -41,24 +41,27 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The agent uses a 4-way router to classify every query before deciding how to answer:
+The agent uses a 6-way router to classify every query before deciding how to answer:
 
 ```
 router ──┬── "implementation" ──► vector retrieval ──► reasoning ──► [tool loop]
-         ├── "structural"  ─────────────────────────► reasoning ──► [tool loop]
-         ├── "generation"  ─────────────────────────► reasoning ──► [tool loop]
-         ├── "analysis"  ───────────────────────────► reasoning ──► [tool loop]
-         └── "direct"      ─────────────────────────► reasoning
+         ├── "structural"    ──► vector retrieval ──► reasoning ──► [tool loop]
+         ├── "analysis"      ──► vector retrieval ──► reasoning ──► [tool loop]
+         ├── "generation"    ──► vector retrieval ──► reasoning ──► [tool loop]
+         ├── "diagram"       ──► vector retrieval ──► reasoning ──► [tool loop]
+         └── "direct"        ────────────────────────► reasoning
 ```
 
 Structural queries use MCP tools (`get-schema`, `read-cypher`) against Neo4j directly. All Cypher is executed via the Neo4j MCP server for safety and consistency.
 
 ### Agent Tools
 
-The agent has access to ten built-in tools plus the MCP tools from the Neo4j server:
+The agent has access to sixteen built-in tools plus the MCP tools from the Neo4j server:
 
 | Tool | Purpose |
 |---|---|
+| `repo_overview` | One-shot overview: top entry points + call chains — use first for broad "how does this work" questions |
+| `module_map` | Full module/package map with languages and per-file entity counts |
 | `semantic_search` | Hybrid dense+sparse vector search over code chunks |
 | `file_reader` | Fetch the full content of any ingested source file |
 | `summarize` | Generate a plain-English summary of a file or class via LLM |
@@ -69,6 +72,10 @@ The agent has access to ten built-in tools plus the MCP tools from the Neo4j ser
 | `find_callers` | Find every function that calls a given target via graph traversal |
 | `list_entry_points` | List all public functions that are not called by any other code |
 | `call_chain` | Trace the execution call tree from a function up to N hops |
+| `git_log` | Recent commits and authors for a repo or specific file path |
+| `git_status` | Uncommitted changes and working-tree status |
+| `git_diff` | Diff between branches, commits, or working-tree state |
+| `git_blame` | Line-by-line attribution for a file |
 | `get-schema` *(MCP)* | Retrieve the Neo4j graph schema |
 | `read-cypher` *(MCP)* | Execute a read-only Cypher query against Neo4j |
 
@@ -81,10 +88,9 @@ The agent has access to ten built-in tools plus the MCP tools from the Neo4j ser
 | Phase 0 — Foundation | ✅ Done | Project scaffold, CI, Docker stack |
 | Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), tree-sitter parser (16 languages incl. COBOL), token-aware chunker |
 | Phase 2 — Knowledge Layer | ✅ Done | Neo4j graph + Qdrant hybrid dense+sparse search + KnowledgeService facade |
-| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, 10 LangChain tools, MCP tools, CLI |
+| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, 16 LangChain tools (incl. git + composite tools), MCP tools, CLI |
 | Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, React/Vite UI with suggestion chips + Monaco viewer |
 | Phase 5 — Documentation | ✅ Done | 5-scope AI doc generation, graph-enriched context, scored entry-point flows, persistence, GitHub-style viewer |
-| Phase 6 — VS Code Extension | Planned | IDE plugin |
 
 ---
 
@@ -235,6 +241,7 @@ Start the frontend:
 ```bash
 cd frontend
 npm install
+npm cache verify
 npm run dev          # http://localhost:5173
 ```
 
@@ -355,8 +362,8 @@ Diagram generation uses a **generate → validate → retry** loop (up to 5 atte
 ## Running Tests
 
 ```bash
-uv run ruff check .           # lint
-uv run ruff format .          # format
-uv run mypy aquila_atlas/     # type check
-uv run pytest                 # all tests
+uv run ruff check .                     # lint
+uv run ruff format .                    # format
+uv run python -m mypy aquila_atlas      # type check
+uv run python -m pytest                 # all tests
 ```

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 JobStatusLiteral = Literal["queued", "running", "done", "failed"]
 
@@ -113,7 +113,7 @@ async def run_ingestion(job_id: str) -> None:
         record.error = str(exc)
 
 
-def _build_loader(record: JobRecord) -> object:
+def _build_loader(record: JobRecord) -> Any:
     """Build the appropriate source loader based on source_type."""
     from aquila_atlas.ingestion import LocalFolderLoader  # noqa: PLC0415
     from aquila_atlas.ingestion.sources import GitHubLoader, ZipLoader  # noqa: PLC0415
