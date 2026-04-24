@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # PostgreSQL (session store)
     postgres_url: str = "postgresql://aquila:aquila@localhost:5432/aquila"
 
+    # Valkey/Redis (job store — leave empty to use in-process dict fallback)
+    valkey_url: str = "redis://localhost:6379/0"
+
     # Neo4j MCP server (HTTP transport)
     mcp_url: str = "http://localhost:8080/mcp"
 

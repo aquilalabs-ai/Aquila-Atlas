@@ -1,11 +1,28 @@
-"""Background ingestion jobs — asyncio-based task queue (MVP in-memory store)."""
+"""Background ingestion jobs — Valkey-backed job store with in-memory cache.
+
+Job lifecycle
+-------------
+1. ``create_job`` / ``create_resync_job`` — allocate a ``JobRecord`` and
+   persist it (status: ``queued``).
+2. ``run_ingestion`` / ``run_resync`` — flip status to ``running``, delegate
+   the blocking work to a thread-pool executor, then persist the final state.
+3. ``get_job`` / ``latest_job_for_repo`` — check the local cache first;
+   fall back to Valkey so jobs created by another worker (or before a restart)
+   are still visible.
+
+When Valkey is unavailable the module falls back silently to the in-process
+``_jobs`` dict — identical behaviour to the original implementation.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from aquila_atlas.api.job_store import JobStore
 
 JobStatusLiteral = Literal["queued", "running", "done", "failed"]
 
@@ -35,10 +52,44 @@ class JobRecord:
 
 
 # ---------------------------------------------------------------------------
-# In-memory job registry
+# Storage — Valkey-backed with in-memory fallback
 # ---------------------------------------------------------------------------
 
 _jobs: dict[str, JobRecord] = {}
+_store: JobStore | None = None
+
+
+def init_job_store(url: str) -> None:
+    """Initialise the Valkey job store.  Called once from the API lifespan."""
+    global _store
+    from aquila_atlas.api.job_store import JobStore  # noqa: PLC0415
+
+    _store = JobStore(url)
+
+
+def _save(record: JobRecord) -> None:
+    """Write-through: cache locally and persist to Valkey."""
+    _jobs[record.job_id] = record
+    if _store is not None:
+        _store.save(record)
+
+
+def _update(record: JobRecord) -> None:
+    """Persist all mutable fields of an existing record to Valkey."""
+    if _store is not None:
+        _store.update(record)
+
+
+def _set_status(record: JobRecord, st: JobStatusLiteral) -> None:
+    """Update status in-place and push the change to Valkey immediately."""
+    record.status = st
+    if _store is not None:
+        _store.update_status(record.job_id, st)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def create_job(
@@ -58,7 +109,7 @@ def create_job(
         github_token=github_token,
         zip_data=zip_data,
     )
-    _jobs[job_id] = record
+    _save(record)
     return record
 
 
@@ -78,16 +129,35 @@ def create_resync_job(
         github_token=github_token,
         ingest_type="resync",
     )
-    _jobs[job_id] = record
+    _save(record)
     return record
 
 
 def get_job(job_id: str) -> JobRecord | None:
-    return _jobs.get(job_id)
+    """Return a job record by ID.
+
+    Checks the local in-memory cache first.  Falls back to Valkey so that jobs
+    created by a different worker process (or before a server restart) are
+    still visible.
+    """
+    if job_id in _jobs:
+        return _jobs[job_id]
+    if _store is not None:
+        record = _store.get(job_id)
+        if record is not None:
+            _jobs[job_id] = record  # warm the local cache
+        return record
+    return None
 
 
 def latest_job_for_repo(repo_id: str) -> JobRecord | None:
-    """Return the most recently created job for a given repo_id."""
+    """Return the most recently created job for *repo_id*.
+
+    Delegates to Valkey when available (correct across workers/restarts);
+    falls back to scanning the local dict.
+    """
+    if _store is not None:
+        return _store.latest_for_repo(repo_id)
     matches = [j for j in _jobs.values() if j.repo_id == repo_id]
     return matches[-1] if matches else None
 
@@ -99,11 +169,11 @@ def latest_job_for_repo(repo_id: str) -> JobRecord | None:
 
 async def run_ingestion(job_id: str) -> None:
     """Run the full ingestion pipeline for *job_id* in a thread-pool executor."""
-    record = _jobs.get(job_id)
+    record = get_job(job_id)
     if record is None:
         return
 
-    record.status = "running"
+    _set_status(record, "running")
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, _sync_ingest, record)
@@ -111,6 +181,8 @@ async def run_ingestion(job_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         record.status = "failed"
         record.error = str(exc)
+    finally:
+        _update(record)
 
 
 def _build_loader(record: JobRecord) -> Any:
@@ -156,17 +228,17 @@ def _sync_ingest(record: JobRecord) -> None:
         commit_sha=commit_sha,
     )
     svc.ingest_chunks(chunks, repo_id=record.repo_id)
-    # Free zip data after ingestion to release memory
+    # Free zip payload after ingestion — triggers Valkey key deletion in _update
     record.zip_data = None
 
 
 async def run_resync(job_id: str) -> None:
     """Run the incremental resync pipeline for *job_id* in a thread-pool executor."""
-    record = _jobs.get(job_id)
+    record = get_job(job_id)
     if record is None:
         return
 
-    record.status = "running"
+    _set_status(record, "running")
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, _sync_resync, record)
@@ -174,6 +246,8 @@ async def run_resync(job_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         record.status = "failed"
         record.error = str(exc)
+    finally:
+        _update(record)
 
 
 def _sync_resync(record: JobRecord) -> None:
