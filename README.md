@@ -12,7 +12,7 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
 
 ## Solution
 
-- **Full repo ingestion** — Ingest entire codebases via local path, GitHub URL, or ZIP upload
+- **Full repo ingestion** — Ingest entire codebases via local path, GitHub, GitLab, Gitea/Forgejo, Bitbucket, any git URL, or ZIP upload
 - **Dependency graph mapping** — Visualise how files, classes, and functions connect and depend on each other
 - **Natural language Q&A** — Ask "Where is user authentication handled?" or "What breaks if I change this file?"
 - **AI-generated documentation** — Auto-generate per-file, per-module, architecture, subsystem, and execution-flow docs
@@ -32,12 +32,12 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
 │                     KNOWLEDGE LAYER                         │
-│    Neo4j (graph)  │  Qdrant (vectors)  │  PostgreSQL        │
+│  Neo4j (graph)  │  Qdrant (vectors)  │  PostgreSQL  │  Valkey/Redis  │
 └───────────────────────┬─────────────────────────────────────┘
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
 │                     INGESTION LAYER                         │
-│  GitHub API  │  tree-sitter (16 languages)  │  Token chunker│
+│  GitHub / GitLab / Gitea / git-clone  │  tree-sitter (16 languages)  │  Token chunker│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,10 +86,10 @@ The agent has access to sixteen built-in tools plus the MCP tools from the Neo4j
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 0 — Foundation | ✅ Done | Project scaffold, CI, Docker stack |
-| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/ZIP), tree-sitter parser (16 languages incl. COBOL), token-aware chunker |
+| Phase 1 — Ingestion Layer | ✅ Done | Source loaders (local/GitHub/GitLab/Gitea/universal git-clone/ZIP), tree-sitter parser (16 languages incl. COBOL), token-aware chunker |
 | Phase 2 — Knowledge Layer | ✅ Done | Neo4j graph + Qdrant hybrid dense+sparse search + KnowledgeService facade |
-| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 4-way router, skill-based prompts, 16 LangChain tools (incl. git + composite tools), MCP tools, CLI |
-| Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, React/Vite UI with suggestion chips + Monaco viewer |
+| Phase 3 — Reasoning Layer | ✅ Done | LangGraph agent, 6-way router, skill-based prompts, 16 LangChain tools (incl. git + composite tools), MCP tools, multi-provider LLM factory, CLI |
+| Phase 4 — REST API + UI | ✅ Done | FastAPI backend (24+ endpoints), SSE streaming, Valkey/Redis job store, React/Vite UI with suggestion chips + Monaco viewer |
 | Phase 5 — Documentation | ✅ Done | 5-scope AI doc generation, graph-enriched context, scored entry-point flows, persistence, GitHub-style viewer |
 
 ---
@@ -101,7 +101,7 @@ The agent has access to sixteen built-in tools plus the MCP tools from the Neo4j
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) — package manager
 - Docker + Docker Compose
-- LLM accessible via an OpenAI-compatible endpoint (default: [Ollama](https://ollama.com) local)
+- An LLM backend — Ollama (local default), or any of: OpenAI, Anthropic, Mistral, HuggingFace, or any OpenAI-compatible endpoint (Together, Groq, …)
 
 ### Setup
 
@@ -109,7 +109,7 @@ The agent has access to sixteen built-in tools plus the MCP tools from the Neo4j
 # Install dependencies
 uv sync --group dev
 
-# Start infrastructure (Neo4j, Qdrant, PostgreSQL, MCP server)
+# Start infrastructure (Neo4j, Qdrant, PostgreSQL, Valkey/Redis, MCP server)
 docker compose up -d
 
 # Copy and configure environment
@@ -119,12 +119,13 @@ cp .env.example .env   # then edit .env
 ### Configuration (`.env`)
 
 ```env
-# LLM — swap base_url + api_key for any OpenAI-compatible provider
-LLM_BASE_URL=http://localhost:11434/v1
+# LLM provider: openai | ollama | openai_compatible | anthropic | mistral | huggingface
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://localhost:11434/v1   # used for openai/ollama/openai_compatible only
 LLM_API_KEY=ollama
 LLM_MODEL=llama3.2
 
-# Embeddings
+# Embeddings — OpenAI-compatible endpoint (default: Ollama local)
 EMBEDDINGS_BASE_URL=http://localhost:11434/v1
 EMBEDDINGS_API_KEY=ollama
 EMBEDDINGS_MODEL=nomic-embed-text
@@ -137,9 +138,19 @@ NEO4J_PASSWORD=password
 # Qdrant
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+# QDRANT_URL=https://...  # Qdrant Cloud (overrides host/port)
+# QDRANT_API_KEY=         # Qdrant Cloud API key
 
 # PostgreSQL — session + doc persistence
 POSTGRES_URL=postgresql://aquila:aquila@localhost:5432/aquila
+
+# Valkey/Redis — background job store (leave blank to use in-process dict fallback)
+VALKEY_URL=redis://localhost:6379/0
+
+# Git hosting tokens — required for private repos; optional for rate-limit relief
+GITHUB_TOKEN=
+GITLAB_TOKEN=
+GITEA_TOKEN=
 
 # Neo4j MCP server
 MCP_URL=http://localhost:8080/mcp
@@ -167,7 +178,10 @@ uv run aquila ingest /path/to/repo --repo my-repo
 
 Sources supported:
 - **Local folder** — absolute path on disk
-- **GitHub URL** — `https://github.com/owner/repo` (set `GITHUB_TOKEN` for private repos)
+- **GitHub** — `https://github.com/owner/repo` (set `GITHUB_TOKEN` for private repos)
+- **GitLab** — `https://gitlab.com/group/repo` or self-hosted; set `GITLAB_TOKEN` for private repos
+- **Gitea / Forgejo** — `https://gitea.example.com/owner/repo`; set `GITEA_TOKEN` for private repos
+- **Any git URL** — HTTPS, SSH, or `file://` (Bitbucket, Azure DevOps, AWS CodeCommit, corporate SSH remotes); pass a token or rely on your SSH agent
 - **ZIP archive** — via CLI flag or UI drag-and-drop
 
 ### 2. Chat with Your Codebase
@@ -362,8 +376,8 @@ Diagram generation uses a **generate → validate → retry** loop (up to 5 atte
 ## Running Tests
 
 ```bash
-uv run ruff check .                     # lint
-uv run ruff format .                    # format
-uv run python -m mypy aquila_atlas      # type check
-uv run python -m pytest                 # all tests
+uv run ruff check .                   # lint
+uv run ruff format .                  # format
+uv run python -m mypy aquila_atlas/   # type check
+uv run python -m pytest               # all tests
 ```

@@ -12,8 +12,9 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
-type Step = 'form' | 'ingesting'
-type SourceTab = 'local' | 'github' | 'zip'
+type Step           = 'form' | 'ingesting'
+type SourceTab      = 'local' | 'remote' | 'zip'
+type RemoteProvider = 'github' | 'gitlab' | 'gitea' | 'git'
 
 interface LocalFileEntry {
   file: File
@@ -22,9 +23,48 @@ interface LocalFileEntry {
 
 const TABS: { key: SourceTab; label: string; icon: typeof FolderOpen }[] = [
   { key: 'local',  label: 'Local folder', icon: FolderOpen },
-  { key: 'github', label: 'GitHub',       icon: GitBranch },
+  { key: 'remote', label: 'Remote',       icon: GitBranch  },
   { key: 'zip',    label: 'Zip upload',   icon: FileArchive },
 ]
+
+const PROVIDERS: { key: RemoteProvider; label: string }[] = [
+  { key: 'github', label: 'GitHub'  },
+  { key: 'gitlab', label: 'GitLab'  },
+  { key: 'gitea',  label: 'Gitea'   },
+  { key: 'git',    label: 'Git URL' },
+]
+
+const PROVIDER_CONFIG: Record<RemoteProvider, {
+  urlPlaceholder:   string
+  tokenLabel:       string
+  tokenPlaceholder: string
+  tokenOptional:    boolean
+}> = {
+  github: {
+    urlPlaceholder:   'https://github.com/owner/repo',
+    tokenLabel:       'GitHub token',
+    tokenPlaceholder: 'ghp_...',
+    tokenOptional:    true,
+  },
+  gitlab: {
+    urlPlaceholder:   'https://gitlab.com/group/repo',
+    tokenLabel:       'GitLab token',
+    tokenPlaceholder: 'glpat-...',
+    tokenOptional:    true,
+  },
+  gitea: {
+    urlPlaceholder:   'https://gitea.example.com/owner/repo',
+    tokenLabel:       'Gitea token',
+    tokenPlaceholder: 'token...',
+    tokenOptional:    true,
+  },
+  git: {
+    urlPlaceholder:   'git@example.com:owner/repo.git',
+    tokenLabel:       'Token (HTTPS only)',
+    tokenPlaceholder: 'token...',
+    tokenOptional:    true,
+  },
+}
 
 // ---------------------------------------------------------------------------
 // Helpers to collect files from a FileSystemDirectoryEntry (drag-and-drop)
@@ -75,12 +115,13 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   const folderRef   = useRef<HTMLInputElement>(null)
   const zipFileRef  = useRef<HTMLInputElement>(null)
 
-  const [tab,             setTab]             = useState<SourceTab>('github')
+  const [tab,             setTab]             = useState<SourceTab>('remote')
+  const [remoteProvider,  setRemoteProvider]  = useState<RemoteProvider>('github')
   const [localFiles,      setLocalFiles]      = useState<LocalFileEntry[] | null>(null)
   const [localFolderName, setLocalFolderName] = useState('')
   const [draggingLocal,   setDraggingLocal]   = useState(false)
-  const [githubUrl,       setGitBranchUrl]    = useState('')
-  const [githubToken,     setGitBranchToken]  = useState('')
+  const [remoteUrl,       setRemoteUrl]       = useState('')
+  const [remoteToken,     setRemoteToken]     = useState('')
   const [zipFile,         setZipFile]         = useState<File | null>(null)
   const [repoId,          setRepoId]          = useState('')
   const [jobId,           setJobId]           = useState<string | null>(null)
@@ -98,7 +139,7 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   function canSubmit(): boolean {
     if (!repoId.trim()) return false
     if (tab === 'local')  return localFiles !== null && localFiles.length > 0
-    if (tab === 'github') return !!githubUrl.trim()
+    if (tab === 'remote') return !!remoteUrl.trim()
     if (tab === 'zip')    return zipFile !== null
     return false
   }
@@ -173,6 +214,18 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   }
 
   // ------------------------------------------------------------------
+  // Remote URL change — auto-extract repo name from any provider URL
+  // ------------------------------------------------------------------
+
+  function handleRemoteUrlChange(url: string) {
+    setRemoteUrl(url)
+    if (!repoId) {
+      const name = url.split(/[/:]+/).filter(Boolean).at(-1)?.replace(/\.git$/, '') ?? ''
+      if (name) setRepoId(name)
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Submit
   // ------------------------------------------------------------------
 
@@ -204,11 +257,12 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
         res = await api.uploadZip(repoId.trim(), zipFile)
 
       } else {
+        // Remote — source_type is the provider name directly
         res = await api.ingest({
           repo_id:      repoId.trim(),
-          source_type:  tab,
-          path:         githubUrl.trim(),
-          github_token: tab === 'github' ? githubToken.trim() : undefined,
+          source_type:  remoteProvider,
+          path:         remoteUrl.trim(),
+          github_token: remoteToken.trim() || undefined,
         })
       }
 
@@ -225,14 +279,13 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   function handleComplete() {
     qc.invalidateQueries({ queryKey: ['repos'] })
     setActiveRepoId(repoId)
-    // Persist source info so resync can find it later (local + github only)
     if (tab === 'local') {
       setRepoSource(repoId.trim(), { path: localFolderName, source_type: 'local' })
-    } else if (tab === 'github') {
+    } else if (tab === 'remote') {
       setRepoSource(repoId.trim(), {
-        path: githubUrl.trim(),
-        source_type: 'github',
-        github_token: githubToken.trim() || undefined,
+        path:         remoteUrl.trim(),
+        source_type:  remoteProvider,
+        github_token: remoteToken.trim() || undefined,
       })
     }
     toast.success(`"${repoId}" is ready!`)
@@ -243,12 +296,13 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
     onOpenChange(false)
     setTimeout(() => {
       setStep('form')
-      setTab('github')
+      setTab('remote')
+      setRemoteProvider('github')
       setLocalFiles(null)
       setLocalFolderName('')
       setDraggingLocal(false)
-      setGitBranchUrl('')
-      setGitBranchToken('')
+      setRemoteUrl('')
+      setRemoteToken('')
       setZipFile(null)
       setRepoId('')
       setJobId(null)
@@ -257,6 +311,7 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   }
 
   const buttonLabel = zipping ? 'Zipping…' : submitting ? 'Starting…' : 'Start ingestion'
+  const providerCfg = PROVIDER_CONFIG[remoteProvider]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -273,7 +328,7 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
           <div>
             <h2 className="text-sm font-semibold text-fg-default">Connect a repository</h2>
             <p className="mt-0.5 text-xs text-fg-muted">
-              {step === 'form' ? 'Choose a source to index' : 'Building the knowledge graph\u2026'}
+              {step === 'form' ? 'Choose a source to index' : 'Building the knowledge graph…'}
             </p>
           </div>
           {step === 'form' && (
@@ -373,9 +428,33 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
                 </div>
               )}
 
-              {/* ---- GITHUB ---- */}
-              {tab === 'github' && (
+              {/* ---- REMOTE ---- */}
+              {tab === 'remote' && (
                 <>
+                  {/* Inner provider selector */}
+                  <div className="flex rounded-md border border-border-default p-0.5 gap-0.5">
+                    {PROVIDERS.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          setRemoteProvider(key)
+                          setRemoteUrl('')
+                          setRepoId('')
+                        }}
+                        className={cn(
+                          'flex flex-1 items-center justify-center rounded px-2 py-1 text-[11px] font-medium transition-colors',
+                          remoteProvider === key
+                            ? 'bg-canvas-subtle text-fg-default'
+                            : 'text-fg-subtle hover:text-fg-muted',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* URL input */}
                   <div>
                     <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-fg-default">
                       <GitBranch className="h-3.5 w-3.5 text-fg-muted" />
@@ -383,27 +462,28 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
                     </label>
                     <input
                       type="text"
-                      value={githubUrl}
-                      onChange={(e) => {
-                        setGitBranchUrl(e.target.value)
-                        const m = e.target.value.match(/github\.com\/[^/]+\/([^/]+)/)
-                        if (m && !repoId) setRepoId(m[1].replace(/\.git$/, ''))
-                      }}
-                      placeholder="https://github.com/owner/repo"
+                      value={remoteUrl}
+                      onChange={(e) => handleRemoteUrlChange(e.target.value)}
+                      placeholder={providerCfg.urlPlaceholder}
                       autoFocus
                       className="w-full rounded-lg border border-border-default bg-canvas-inset px-3 py-2 text-sm font-mono text-fg-default placeholder-fg-subtle outline-none transition-colors focus:border-accent-fg focus:ring-1 focus:ring-accent-fg"
                       required
                     />
                   </div>
+
+                  {/* Token input */}
                   <div>
                     <label className="mb-1.5 text-xs font-medium text-fg-default">
-                      GitHub token <span className="font-normal text-fg-subtle">(optional, for private repos)</span>
+                      {providerCfg.tokenLabel}{' '}
+                      {providerCfg.tokenOptional && (
+                        <span className="font-normal text-fg-subtle">(optional, for private repos)</span>
+                      )}
                     </label>
                     <input
                       type="password"
-                      value={githubToken}
-                      onChange={(e) => setGitBranchToken(e.target.value)}
-                      placeholder="ghp_..."
+                      value={remoteToken}
+                      onChange={(e) => setRemoteToken(e.target.value)}
+                      placeholder={providerCfg.tokenPlaceholder}
                       className="w-full rounded-lg border border-border-default bg-canvas-inset px-3 py-2 text-sm font-mono text-fg-default placeholder-fg-subtle outline-none transition-colors focus:border-accent-fg focus:ring-1 focus:ring-accent-fg"
                     />
                   </div>

@@ -21,7 +21,7 @@ export interface ChatMessage {
 
 export interface RepoSource {
   path: string
-  source_type: 'local' | 'github'
+  source_type: 'local' | 'github' | 'gitlab' | 'gitea' | 'git'
   github_token?: string
 }
 

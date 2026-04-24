@@ -1,4 +1,4 @@
-"""GitDiffTool — show a diff between git refs (local or GitHub)."""
+"""GitDiffTool — show a diff between git refs (local or remote)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ from ._helpers import (
     _gh_get,
     _gh_owner_repo,
     _gh_token,
+    _gitea_get,
+    _gitea_parts,
+    _gitea_token,
+    _gl_get,
+    _gl_parts,
+    _gl_token,
     _resolve_repo_source,
     _run_git,
 )
@@ -34,7 +40,7 @@ class GitDiffInput(BaseModel):
         description=(
             "Optional second ref to compare against ref1. "
             "For local repos: defaults to working tree. "
-            "For GitHub repos: defaults to HEAD~1 when ref1 is HEAD, "
+            "For remote repos: defaults to HEAD~1 when ref1 is HEAD, "
             "so the diff shows what the latest commit introduced."
         ),
     )
@@ -45,14 +51,14 @@ class GitDiffInput(BaseModel):
 
 
 class GitDiffTool(BaseTool):
-    """Show a diff between git refs (local or GitHub)."""
+    """Show a diff between git refs (local or remote)."""
 
     name: str = "git_diff"
     description: str = (
         "Show a git diff between two commits, branches, or tags. "
         "For local repos you can also compare against the working tree by leaving ref2 empty. "
-        "For GitHub repos both refs are compared via the GitHub compare API. "
-        "Works for local git repos and GitHub-hosted repos."
+        "For remote repos both refs are compared via the provider compare API. "
+        "Works for local git repos and GitHub/GitLab/Gitea-hosted repos."
     )
     args_schema: type[BaseModel] = GitDiffInput
     service: Any  # KnowledgeService
@@ -76,6 +82,7 @@ class GitDiffTool(BaseTool):
         if kind == "error":
             return err  # type: ignore[return-value]
 
+        # ── Local ────────────────────────────────────────────────────────────
         if kind == "local":
             args = ["diff", "--no-color"]
             if ref1:
@@ -95,49 +102,156 @@ class GitDiffTool(BaseTool):
                 header += f" -- {file_path}"
             return f"{header}:\n\n{out}"
 
-        # GitHub — use compare API
         assert isinstance(source, str)
-        parsed = _gh_owner_repo(source)
-        if not parsed:
-            return f"Could not parse GitHub URL: {source}"
-        owner, repo = parsed
-        token = _gh_token()
 
-        # When ref2 is not supplied, compare ref1~1...ref1 (changes introduced by ref1)
-        base = ref1 if ref1 else "HEAD"
-        head = ref2 if ref2 else base
-        if head == base:
-            # Show what the commit at `base` introduced
-            head = base
-            base = f"{base}~1"
-
-        data, err2 = _gh_get(f"/repos/{owner}/{repo}/compare/{base}...{head}", token)
-        if err2:
-            return f"git diff failed: {err2}"
-        if not isinstance(data, dict):
-            return "No diff data returned."
-
-        files = data.get("files") or []
-        if not files:
-            return f"No differences between {base} and {head}."
-
-        if file_path:
-            files = [f for f in files if str(f.get("filename", "")) == file_path]
+        # ── GitHub ───────────────────────────────────────────────────────────
+        if kind == "github":
+            parsed = _gh_owner_repo(source)
+            if not parsed:
+                return f"Could not parse GitHub URL: {source}"
+            owner, repo = parsed
+            token = _gh_token()
+            base = ref1 if ref1 else "HEAD"
+            head = ref2 if ref2 else base
+            if head == base:
+                head = base
+                base = f"{base}~1"
+            data, err2 = _gh_get(f"/repos/{owner}/{repo}/compare/{base}...{head}", token)
+            if err2:
+                return f"git diff failed: {err2}"
+            if not isinstance(data, dict):
+                return "No diff data returned."
+            files = data.get("files") or []
             if not files:
-                return f"No diff for '{file_path}' between {base} and {head}."
+                return f"No differences between {base} and {head}."
+            if file_path:
+                files = [f for f in files if str(f.get("filename", "")) == file_path]
+                if not files:
+                    return f"No diff for '{file_path}' between {base} and {head}."
+            parts: list[str] = [
+                f"git diff {base}...{head} (GitHub — {len(files)} file(s) changed):\n"
+            ]
+            total = len(parts[0])
+            for f in files:
+                fname = f.get("filename", "?")
+                status = f.get("status", "?")
+                additions = f.get("additions", 0)
+                deletions = f.get("deletions", 0)
+                patch = str(f.get("patch", ""))
+                entry = f"\n--- {fname}  [{status}  +{additions}/-{deletions}]\n{patch}"
+                if total + len(entry) > _GIT_MAX_OUTPUT:
+                    parts.append("\n[truncated — remaining files omitted]")
+                    break
+                parts.append(entry)
+                total += len(entry)
+            return "".join(parts)
 
-        parts = [f"git diff {base}...{head} (GitHub — {len(files)} file(s) changed):\n"]
-        total_chars = len(parts[0])
-        for f in files:
-            fname = f.get("filename", "?")
-            status = f.get("status", "?")
-            additions = f.get("additions", 0)
-            deletions = f.get("deletions", 0)
-            patch = str(f.get("patch", ""))
-            entry = f"\n--- {fname}  [{status}  +{additions}/-{deletions}]\n{patch}"
-            if total_chars + len(entry) > _GIT_MAX_OUTPUT:
-                parts.append("\n[truncated — remaining files omitted]")
-                break
-            parts.append(entry)
-            total_chars += len(entry)
-        return "".join(parts)
+        # ── GitLab ───────────────────────────────────────────────────────────
+        if kind == "gitlab":
+            gl = _gl_parts(source)
+            if not gl:
+                return (
+                    f"Cannot query the GitLab API for SSH-cloned repo '{repo_id}'. "
+                    "Re-ingest using an HTTPS URL to enable git tool support."
+                )
+            api_base, _proj_path, proj_id = gl
+            token = _gl_token()
+            base = ref1 if ref1 else "HEAD"
+            head = ref2 if ref2 else base
+            if head == base:
+                head = base
+                base = f"{base}~1"
+            import urllib.parse as _up  # noqa: PLC0415
+
+            data, err2 = _gl_get(
+                api_base,
+                f"/projects/{proj_id}/repository/compare"
+                f"?from={_up.quote(base, safe='')}&to={_up.quote(head, safe='')}",
+                token,
+            )
+            if err2:
+                return f"git diff failed: {err2}"
+            if not isinstance(data, dict):
+                return "No diff data returned."
+            diffs = data.get("diffs") or []
+            if not diffs:
+                return f"No differences between {base} and {head}."
+            if file_path:
+                diffs = [
+                    d for d in diffs if str(d.get("new_path") or d.get("old_path")) == file_path
+                ]
+                if not diffs:
+                    return f"No diff for '{file_path}' between {base} and {head}."
+            parts = [f"git diff {base}...{head} (GitLab — {len(diffs)} file(s) changed):\n"]
+            total = len(parts[0])
+            for d in diffs:
+                fname = str(d.get("new_path") or d.get("old_path") or "?")
+                renamed = d.get("renamed_file", False)
+                deleted = d.get("deleted_file", False)
+                new_file = d.get("new_file", False)
+                status = (
+                    "renamed"
+                    if renamed
+                    else "deleted"
+                    if deleted
+                    else "added"
+                    if new_file
+                    else "modified"
+                )
+                diff_text = str(d.get("diff", ""))
+                entry = f"\n--- {fname}  [{status}]\n{diff_text}"
+                if total + len(entry) > _GIT_MAX_OUTPUT:
+                    parts.append("\n[truncated — remaining files omitted]")
+                    break
+                parts.append(entry)
+                total += len(entry)
+            return "".join(parts)
+
+        # ── Gitea / Forgejo ──────────────────────────────────────────────────
+        if kind == "gitea":
+            gt = _gitea_parts(source)
+            if not gt:
+                return (
+                    f"Cannot query the Gitea API for SSH-cloned repo '{repo_id}'. "
+                    "Re-ingest using an HTTPS URL to enable git tool support."
+                )
+            api_base, owner, repo = gt
+            token = _gitea_token()
+            base = ref1 if ref1 else "HEAD"
+            head = ref2 if ref2 else base
+            import urllib.parse as _up2  # noqa: PLC0415
+
+            data, err2 = _gitea_get(
+                api_base,
+                f"/repos/{owner}/{repo}/compare/{_up2.quote(base, safe='')}...{_up2.quote(head, safe='')}",
+                token,
+            )
+            if err2:
+                return f"git diff failed: {err2}"
+            # Gitea compare returns a list of commit diffs; summarise file list
+            if not isinstance(data, dict):
+                return "No diff data returned."
+            files = data.get("files") or []
+            if not files:
+                return f"No differences between {base} and {head}."
+            if file_path:
+                files = [f for f in files if str(f.get("filename", "")) == file_path]
+                if not files:
+                    return f"No diff for '{file_path}' between {base} and {head}."
+            parts = [f"git diff {base}...{head} (Gitea — {len(files)} file(s) changed):\n"]
+            total = len(parts[0])
+            for f in files:
+                fname = str(f.get("filename", "?"))
+                status = str(f.get("status", "?"))
+                adds = f.get("additions", 0)
+                dels = f.get("deletions", 0)
+                patch = str(f.get("patch", ""))
+                entry = f"\n--- {fname}  [{status}  +{adds}/-{dels}]\n{patch}"
+                if total + len(entry) > _GIT_MAX_OUTPUT:
+                    parts.append("\n[truncated — remaining files omitted]")
+                    break
+                parts.append(entry)
+                total += len(entry)
+            return "".join(parts)
+
+        return f"Unsupported source kind '{kind}' for repo '{repo_id}'."

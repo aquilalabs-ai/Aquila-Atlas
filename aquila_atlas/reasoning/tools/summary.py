@@ -43,8 +43,6 @@ class SummaryTool(BaseTool):
 
     def _run(self, target: str, repo_id: str) -> str:
         logger.debug("tool=summarize repo=%s target=%r", repo_id, target)
-        from aquila_atlas.config import get_settings  # noqa: PLC0415
-
         svc = cast("KnowledgeService", self.service)
         is_file = "/" in target or target.endswith(".py")
         results = svc.search(
@@ -61,7 +59,6 @@ class SummaryTool(BaseTool):
         )
         return _llm_complete(
             self.llm,
-            model=get_settings().llm_model,
             system=(
                 "You are an expert software engineer. "
                 "Summarise the provided code concisely — "

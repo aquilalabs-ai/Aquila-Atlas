@@ -25,9 +25,8 @@ def get_tools(
         List of LangChain :class:`~langchain_core.tools.BaseTool` instances ready
         to be bound to an agent.
     """
-    import openai  # noqa: PLC0415
-
     from aquila_atlas.config import get_settings  # noqa: PLC0415
+    from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
 
     from .call_chain import CallChainTool
     from .docstring import DocGenerationTool
@@ -43,7 +42,7 @@ def get_tools(
     from .summary import SummaryTool
 
     s = settings or get_settings()
-    llm = openai.OpenAI(base_url=s.llm_base_url, api_key=s.llm_api_key)
+    llm = get_chat_model(s)
     # Graph traversal and direct cypher queries are handled via MCP tools
     # (get-schema/read-cypher/write-cypher) to avoid building cypher in local tools.
     return [

@@ -176,7 +176,8 @@ class MermaidGeneratorTool(BaseTool):
         scope: str = "",
         focus: str = "",
     ) -> str:
-        from aquila_atlas.config import get_settings  # noqa: PLC0415
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: PLC0415
+
         from aquila_atlas.reasoning.mermaid import (  # noqa: PLC0415
             extract_mermaid_block,
             validate_with_node,
@@ -192,7 +193,6 @@ class MermaidGeneratorTool(BaseTool):
         )
 
         svc = cast("KnowledgeService", self.service)
-        model = get_settings().llm_model
 
         # ── 1. Query graph data ───────────────────────────────────────────
         cypher = _MERMAID_CYPHER.get(diagram_type)
@@ -225,9 +225,9 @@ class MermaidGeneratorTool(BaseTool):
             "Wrap your response in ```mermaid fences — nothing else."
         )
 
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": _MERMAID_GEN_SYSTEM},
-            {"role": "user", "content": initial_prompt},
+        lc_messages: list[Any] = [
+            SystemMessage(content=_MERMAID_GEN_SYSTEM),
+            HumanMessage(content=initial_prompt),
         ]
 
         # ── 3. LLM generate → Node validate → feedback loop ──────────────
@@ -238,12 +238,8 @@ class MermaidGeneratorTool(BaseTool):
         last_errors: list[str] = []
 
         for attempt in range(1, self._MAX_ATTEMPTS + 1):
-            response = self.llm.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=2000,
-            )
-            raw = response.choices[0].message.content or ""
+            ai_msg: AIMessage = self.llm.invoke(lc_messages)
+            raw = str(ai_msg.content)
             diagram = extract_mermaid_block(raw)
 
             errors = validate_with_node(diagram)
@@ -262,16 +258,15 @@ class MermaidGeneratorTool(BaseTool):
 
             if attempt < self._MAX_ATTEMPTS:
                 error_list = "\n".join(f"- {e}" for e in errors)
-                messages.append({"role": "assistant", "content": raw})
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
+                lc_messages.append(ai_msg)
+                lc_messages.append(
+                    HumanMessage(
+                        content=(
                             "The diagram has syntax errors — fix them and return ONLY the "
                             "corrected diagram in ```mermaid fences.\n\n"
                             f"Errors:\n{error_list}"
-                        ),
-                    }
+                        )
+                    )
                 )
 
         logger.warning(

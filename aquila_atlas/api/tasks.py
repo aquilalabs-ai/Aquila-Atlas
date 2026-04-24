@@ -188,10 +188,22 @@ async def run_ingestion(job_id: str) -> None:
 def _build_loader(record: JobRecord) -> Any:
     """Build the appropriate source loader based on source_type."""
     from aquila_atlas.ingestion import LocalFolderLoader  # noqa: PLC0415
-    from aquila_atlas.ingestion.sources import GitHubLoader, ZipLoader  # noqa: PLC0415
+    from aquila_atlas.ingestion.sources import (  # noqa: PLC0415
+        GitCloneLoader,
+        GiteaLoader,
+        GitHubLoader,
+        GitLabLoader,
+        ZipLoader,
+    )
 
     if record.source_type == "github":
         return GitHubLoader(url=record.path, token=record.github_token)
+    if record.source_type == "gitlab":
+        return GitLabLoader(url=record.path, token=record.github_token)
+    if record.source_type == "gitea":
+        return GiteaLoader(url=record.path, token=record.github_token)
+    if record.source_type == "git":
+        return GitCloneLoader(url=record.path, token=record.github_token)
     if record.source_type == "zip":
         if record.zip_data:
             return ZipLoader(record.zip_data)
