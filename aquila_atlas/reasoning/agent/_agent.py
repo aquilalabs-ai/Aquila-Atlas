@@ -57,10 +57,8 @@ class CodebaseAgent:
         settings: Settings | None = None,
         extra_tools: list[BaseTool] | None = None,
     ) -> None:
-        from langchain_openai import ChatOpenAI  # noqa: PLC0415
-        from pydantic import SecretStr  # noqa: PLC0415
-
         from aquila_atlas.config import get_settings  # noqa: PLC0415
+        from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
 
         from ._graph import build_graph
         from ._state import AgentState  # noqa: F401
@@ -71,12 +69,8 @@ class CodebaseAgent:
         self._repo_id = repo_id
         self._history: list[BaseMessage] = []
         self._settings = s
-        # Lightweight LLM client used only for history compaction (no tools bound).
-        self._compaction_llm = ChatOpenAI(
-            model=s.llm_model,
-            base_url=s.llm_base_url,
-            api_key=SecretStr(s.llm_api_key),
-        )
+        # Lightweight LLM used only for history compaction (no tools bound).
+        self._compaction_llm = get_chat_model(s)
 
     # ------------------------------------------------------------------
     # History access (used by the API layer for persistence)

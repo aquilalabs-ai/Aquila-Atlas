@@ -1,9 +1,10 @@
-"""Shared helpers for git tools (local subprocess + GitHub REST API)."""
+"""Shared helpers for git tools (local subprocess + GitHub/GitLab/Gitea REST APIs)."""
 
 from __future__ import annotations
 
 import re as _re
 import subprocess
+import urllib.parse as _up
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -12,18 +13,36 @@ if TYPE_CHECKING:
 
 _GIT_MAX_OUTPUT = 6000  # chars — truncate long output to keep context lean
 
+# ── Provider URL patterns ────────────────────────────────────────────────────
+
 _GH_REPO_RE = _re.compile(
     r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:/tree/[^/].*)?/?$"
 )
+_GL_HOST_RE = _re.compile(r"(?:^|\.)gitlab\.", _re.IGNORECASE)
+_GITEA_HOST_RE = _re.compile(r"(?:^|\.)(gitea\.|codeberg\.org|forgejo\.)", _re.IGNORECASE)
+
+
+def _hostname_from_label(label: str) -> str:
+    """Extract hostname from any URL form (https://, git@, ssh://)."""
+    try:
+        if label.startswith(("https://", "http://")):
+            return _up.urlparse(label).hostname or ""
+        # git@host:path  or  ssh://[user@]host/path
+        m = _re.match(r"(?:git@|ssh://(?:[^@]+@)?)([^:/]+)", label)
+        return m.group(1) if m else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _resolve_repo_source(svc: KnowledgeService, repo_id: str) -> tuple[str, Any, str | None]:
     """Resolve *repo_id* to its ingested source.
 
     Returns one of:
-    - ``("local", Path, None)``   — local directory that is a git repo
-    - ``("github", url, None)``   — GitHub-hosted repo (URL string)
-    - ``("error", None, message)``— unusable source with a human-readable reason
+    - ``("local",  Path, None)``       — local directory that is a git repo
+    - ``("github", url,  None)``       — GitHub-hosted repo (URL string)
+    - ``("gitlab", url,  None)``       — GitLab-hosted repo (URL string)
+    - ``("gitea",  url,  None)``       — Gitea/Forgejo-hosted repo (URL string)
+    - ``("error",  None, message)``    — unusable source with a human-readable reason
     """
     try:
         rows = svc.graph.cypher_read(
@@ -47,18 +66,24 @@ def _resolve_repo_source(svc: KnowledgeService, repo_id: str) -> tuple[str, Any,
     if not label:
         return "error", None, f"Repository '{repo_id}' has no source path recorded."
 
-    # GitHub URL
+    # GitHub
     if _GH_REPO_RE.match(label.rstrip("/")):
         return "github", label, None
 
-    # Other remote URLs (GitLab, Bitbucket, raw git…) — no API support yet
+    # Detect other remote URLs by hostname
     if label.startswith(("https://", "http://", "git@", "ssh://")):
+        host = _hostname_from_label(label)
+        if _GL_HOST_RE.search(host):
+            return "gitlab", label, None
+        if _GITEA_HOST_RE.search(host):
+            return "gitea", label, None
         return (
             "error",
             None,
             (
-                f"Repository '{repo_id}' was ingested from a remote URL ({label}). "
-                "Only GitHub and local git repositories are supported by the git tools."
+                f"Repository '{repo_id}' was ingested from '{label}'. "
+                "Git tools support GitHub, GitLab, and Gitea (auto-detected by hostname). "
+                "For other providers, inspect the repository directly on the hosting platform."
             ),
         )
 
@@ -99,6 +124,9 @@ def _resolve_repo_source(svc: KnowledgeService, repo_id: str) -> tuple[str, Any,
     return "local", path, None
 
 
+# ── Local git ────────────────────────────────────────────────────────────────
+
+
 def _run_git(path: Path, args: list[str], timeout: int = 30) -> tuple[str, str | None]:
     """Run a git command in *path*.  Returns ``(stdout, None)`` or ``('', error)``."""
     try:
@@ -120,6 +148,9 @@ def _run_git(path: Path, args: list[str], timeout: int = 30) -> tuple[str, str |
         return "", "git command timed out."
     except FileNotFoundError:
         return "", "git is not installed or not found in PATH."
+
+
+# ── GitHub ───────────────────────────────────────────────────────────────────
 
 
 def _gh_headers(token: str = "") -> dict[str, str]:
@@ -178,7 +209,106 @@ def _gh_owner_repo(url: str) -> tuple[str, str] | None:
 
 
 def _gh_token() -> str:
-    """Return the GitHub token from settings (empty string if not configured)."""
     from aquila_atlas.config import get_settings  # noqa: PLC0415
 
     return get_settings().github_token
+
+
+# ── GitLab ───────────────────────────────────────────────────────────────────
+
+
+def _gl_token() -> str:
+    from aquila_atlas.config import get_settings  # noqa: PLC0415
+
+    return get_settings().gitlab_token
+
+
+def _gl_parts(url: str) -> tuple[str, str, str] | None:
+    """Parse a GitLab URL into ``(api_base, project_path, project_id_encoded)``.
+
+    Works for https:// URLs only (SSH URLs cannot be used for REST API calls
+    without knowing the HTTPS base URL separately).
+    """
+    try:
+        parsed = _up.urlparse(url.rstrip("/"))
+        if parsed.scheme not in ("http", "https"):
+            return None
+        api_base = f"{parsed.scheme}://{parsed.netloc}"
+        proj_path = parsed.path.strip("/").removesuffix(".git")
+        if not proj_path:
+            return None
+        return api_base, proj_path, _up.quote(proj_path, safe="")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gl_get(api_base: str, path: str, token: str = "") -> tuple[Any, str | None]:
+    """GET a GitLab REST API v4 path.  Returns ``(data, None)`` or ``(None, error)``."""
+    import httpx  # noqa: PLC0415
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["PRIVATE-TOKEN"] = token
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(f"{api_base}/api/v4{path}", headers=headers)
+            if resp.status_code == 401:
+                return None, (
+                    "GitLab: authentication required — "
+                    "set GITLAB_TOKEN in .env (read_api + read_repository scope)."
+                )
+            if resp.status_code == 403:
+                return None, "GitLab: access denied — token may lack read_repository scope."
+            if resp.status_code == 404:
+                return None, f"GitLab: resource not found ({api_base}{path})."
+            resp.raise_for_status()
+            return resp.json(), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"GitLab API request failed: {exc}"
+
+
+# ── Gitea / Forgejo ──────────────────────────────────────────────────────────
+
+
+def _gitea_token() -> str:
+    from aquila_atlas.config import get_settings  # noqa: PLC0415
+
+    return get_settings().gitea_token
+
+
+def _gitea_parts(url: str) -> tuple[str, str, str] | None:
+    """Parse a Gitea URL into ``(api_base, owner, repo)``."""
+    try:
+        parsed = _up.urlparse(url.rstrip("/"))
+        if parsed.scheme not in ("http", "https"):
+            return None
+        api_base = f"{parsed.scheme}://{parsed.netloc}"
+        path = parsed.path.strip("/").removesuffix(".git")
+        parts = path.split("/")
+        if len(parts) < 2:
+            return None
+        return api_base, parts[0], parts[1]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _gitea_get(api_base: str, path: str, token: str = "") -> tuple[Any, str | None]:
+    """GET a Gitea REST API v1 path.  Returns ``(data, None)`` or ``(None, error)``."""
+    import httpx  # noqa: PLC0415
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(f"{api_base}/api/v1{path}", headers=headers)
+            if resp.status_code in (401, 403):
+                return None, (
+                    "Gitea: authentication failed — set GITEA_TOKEN in .env with an access token."
+                )
+            if resp.status_code == 404:
+                return None, f"Gitea: resource not found ({api_base}{path})."
+            resp.raise_for_status()
+            return resp.json(), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Gitea API request failed: {exc}"

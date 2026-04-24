@@ -20,14 +20,9 @@ if TYPE_CHECKING:
 
 
 def _make_llm(settings: Settings) -> Any:
-    from langchain_openai import ChatOpenAI  # noqa: PLC0415
-    from pydantic import SecretStr  # noqa: PLC0415
+    from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
 
-    return ChatOpenAI(
-        model=settings.llm_model,
-        base_url=settings.llm_base_url,
-        api_key=SecretStr(settings.llm_api_key),
-    )
+    return get_chat_model(settings)
 
 
 def _search_context(

@@ -9,6 +9,8 @@ def _make_mock_settings() -> MagicMock:
     s = MagicMock()
     s.llm_base_url = "http://localhost:11434/v1"
     s.llm_api_key = "ollama"
+    s.llm_provider = "ollama"
+    s.llm_model = "llama2"
     return s
 
 

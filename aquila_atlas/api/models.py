@@ -114,13 +114,32 @@ class IngestRequest(BaseModel):
     repo_id: str = Field(..., description="Unique identifier for this repository")
     source_type: str = Field(
         "local",
-        description="Source type: 'local' (filesystem path), 'github' (GitHub URL), or 'zip' (uploaded zip)",
+        description=(
+            "Source type: "
+            "'local' (filesystem path), "
+            "'github' (GitHub URL), "
+            "'gitlab' (GitLab URL — self-hosted or gitlab.com), "
+            "'gitea' (Gitea / Forgejo URL), "
+            "'git' (any git-cloneable URL: HTTPS, SSH, file://), "
+            "'zip' (uploaded zip archive)"
+        ),
     )
     path: str = Field(
         "",
-        description="Local filesystem path (source_type=local) or GitHub URL (source_type=github)",
+        description=(
+            "Repository URL or local filesystem path, depending on source_type. "
+            "For 'local': absolute path. "
+            "For 'github'/'gitlab'/'gitea'/'git': full URL."
+        ),
     )
-    github_token: str = Field("", description="Optional GitHub PAT for private repos")
+    github_token: str = Field(
+        "",
+        description=(
+            "Access token for the remote source. "
+            "GitHub PAT, GitLab PAT, Gitea access token, or bearer token for 'git' HTTPS URLs. "
+            "Leave empty for public repos or SSH-authenticated clones."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -134,6 +153,24 @@ class IngestRequest(BaseModel):
                     "repo_id": "my-service",
                     "source_type": "github",
                     "path": "https://github.com/owner/repo",
+                    "github_token": "ghp_...",
+                },
+                {
+                    "repo_id": "my-service",
+                    "source_type": "gitlab",
+                    "path": "https://gitlab.example.com/group/repo",
+                    "github_token": "glpat-...",
+                },
+                {
+                    "repo_id": "my-service",
+                    "source_type": "gitea",
+                    "path": "https://gitea.example.com/owner/repo",
+                    "github_token": "your-token",
+                },
+                {
+                    "repo_id": "my-service",
+                    "source_type": "git",
+                    "path": "git@git.corp.com:team/repo.git",
                 },
             ]
         }

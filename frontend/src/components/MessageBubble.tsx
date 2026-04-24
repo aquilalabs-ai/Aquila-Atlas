@@ -357,6 +357,9 @@ export const MessageBubble = memo(function MessageBubble({ message, repoId, isLa
     pre({ children }) {
       return <>{children}</>
     },
+    br() {
+      return <br />
+    },
   }), [message.isStreaming, repoId])
 
   return (

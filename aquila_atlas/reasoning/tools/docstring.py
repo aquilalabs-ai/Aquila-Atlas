@@ -43,8 +43,6 @@ class DocGenerationTool(BaseTool):
 
     def _run(self, function_id: str, repo_id: str) -> str:
         logger.debug("tool=generate_docstring repo=%s id=%r", repo_id, function_id)
-        from aquila_atlas.config import get_settings  # noqa: PLC0415
-
         svc = cast("KnowledgeService", self.service)
         results = svc.search(query=function_id, repo_id=repo_id, top_k=3, chunk_type="function")
         if not results:
@@ -55,7 +53,6 @@ class DocGenerationTool(BaseTool):
         top = results[0]
         return _llm_complete(
             self.llm,
-            model=get_settings().llm_model,
             system=(
                 "You are an expert Python developer. "
                 "Generate a concise, accurate Google-style docstring for the given function. "

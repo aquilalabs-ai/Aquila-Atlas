@@ -29,23 +29,16 @@ def build_graph(
     Returns:
         Compiled LangGraph ready for ``invoke`` / ``stream`` / ``ainvoke`` / ``astream``.
     """
-    from langchain_openai import ChatOpenAI  # noqa: PLC0415
     from langgraph.graph import START, StateGraph  # noqa: PLC0415
     from langgraph.prebuilt import ToolNode, tools_condition  # noqa: PLC0415
-    from pydantic import SecretStr  # noqa: PLC0415
 
+    from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
     from aquila_atlas.reasoning.tools import get_tools as get_knowledge_tools  # noqa: PLC0415
 
     from ._nodes import _reasoning_node, _retrieval_node, _route_condition, _router_node
     from ._state import AgentState
 
-    llm = ChatOpenAI(
-        model=settings.llm_model,
-        base_url=settings.llm_base_url,
-        api_key=SecretStr(settings.llm_api_key),
-        streaming=True,
-        stream_usage=True,  # include usage metadata in the final streaming chunk
-    )
+    llm = get_chat_model(settings, streaming=True)
 
     all_tools = get_knowledge_tools(service, settings) + (extra_tools or [])
     llm_with_tools = llm.bind_tools(all_tools)

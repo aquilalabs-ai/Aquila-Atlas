@@ -123,11 +123,18 @@ class VectorStore:
         embeddings_base_url: str,
         embeddings_api_key: str,
         embeddings_model: str,
+        qdrant_url: str = "",
+        qdrant_api_key: str = "",
     ) -> None:
         from openai import OpenAI  # noqa: PLC0415
         from qdrant_client import QdrantClient  # noqa: PLC0415
 
-        self._client: QdrantClient = QdrantClient(host=host, port=port)
+        if qdrant_url:
+            self._client: QdrantClient = QdrantClient(
+                url=qdrant_url, api_key=qdrant_api_key or None
+            )
+        else:
+            self._client = QdrantClient(host=host, port=port)
         self._embeddings: OpenAI = OpenAI(
             base_url=embeddings_base_url,
             api_key=embeddings_api_key,
@@ -563,4 +570,6 @@ def get_vector_store(settings: Settings | None = None) -> VectorStore:
         embeddings_base_url=s.embeddings_base_url,
         embeddings_api_key=s.embeddings_api_key,
         embeddings_model=s.embeddings_model,
+        qdrant_url=s.qdrant_url,
+        qdrant_api_key=s.qdrant_api_key,
     )

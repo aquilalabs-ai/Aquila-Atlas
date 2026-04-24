@@ -1,4 +1,13 @@
 services:
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    command: ["valkey-server", "--appendonly", "yes"]
+    restart: unless-stopped
+
   mcp-neo4j:
     image: mcp/neo4j
     environment:
@@ -48,3 +57,4 @@ volumes:
   neo4j_data:
   qdrant_data:
   postgres_data:
+  valkey_data:

@@ -5,22 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 
-def _llm_complete(llm: Any, model: str, system: str, user: str, max_tokens: int = 3500) -> str:
-    """Run a single chat completion and return the response text.
+def _llm_complete(llm: Any, system: str, user: str) -> str:
+    """Run a single chat completion via a LangChain BaseChatModel.
 
     Returns an error string (not raises) if the model produces no content,
     so callers stay simple.
     """
-    response = llm.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        max_tokens=max_tokens,
-    )
-    content = response.choices[0].message.content
+    from langchain_core.messages import HumanMessage, SystemMessage  # noqa: PLC0415
+
+    response = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    content = response.content
     if not content:
-        reason = response.choices[0].finish_reason
-        return f"No response generated. (finish_reason={reason!r}, model={model!r})"
+        return "No response generated."
     return str(content)

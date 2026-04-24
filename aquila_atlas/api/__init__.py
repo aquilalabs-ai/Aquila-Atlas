@@ -65,6 +65,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.sessions = {}
     app.state.session_meta = {}  # session_id → metadata (title, created_at, …)
 
+    # Job store — persists ingestion jobs in Valkey across restarts and workers
+    from aquila_atlas.api.tasks import init_job_store  # noqa: PLC0415
+
+    try:
+        init_job_store(get_settings().valkey_url)
+        _log.info("Job store connected to Valkey at %s", get_settings().valkey_url)
+    except Exception:
+        _log.warning(
+            "Valkey unavailable — ingestion jobs will not persist across restarts", exc_info=True
+        )
+
     # Session store — persists chat history across restarts
     try:
         app.state.store = create_store(get_settings().postgres_url)

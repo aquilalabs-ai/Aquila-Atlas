@@ -4,11 +4,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # GitHub (optional — only needed for GitHub source loader)
+    # Git hosting tokens (optional — only needed for private repos or API rate-limit relief)
     github_token: str = ""
+    gitlab_token: str = ""  # GitLab Personal Access Token (read_api + read_repository scope)
+    gitea_token: str = ""  # Gitea/Forgejo access token
 
-    # LLM — OpenAI-compatible endpoint (default: Ollama local)
-    llm_base_url: str = "http://localhost:11434/v1"
+    # LLM provider — openai | ollama | openai_compatible | anthropic | mistral | huggingface
+    llm_provider: str = "openai_compatible"
+    # LLM model and credentials (shared by all providers)
+    llm_base_url: str = "http://localhost:11434/v1"  # only used for openai/ollama/openai_compatible
     llm_api_key: str = "ollama"
     llm_model: str = "llama3.2"
 
@@ -25,9 +29,14 @@ class Settings(BaseSettings):
     # Qdrant
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
+    qdrant_url: str = ""  # set to Qdrant Cloud URL (overrides host/port)
+    qdrant_api_key: str = ""  # Qdrant Cloud API key
 
     # PostgreSQL (session store)
     postgres_url: str = "postgresql://aquila:aquila@localhost:5432/aquila"
+
+    # Valkey/Redis (job store — leave empty to use in-process dict fallback)
+    valkey_url: str = "redis://localhost:6379/0"
 
     # Neo4j MCP server (HTTP transport)
     mcp_url: str = "http://localhost:8080/mcp"

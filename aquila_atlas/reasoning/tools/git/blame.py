@@ -36,8 +36,8 @@ class GitBlameTool(BaseTool):
         "Show who last modified each line of a file and in which commit (git blame). "
         "Optionally restrict to a line range. Useful for understanding the history of a "
         "specific piece of code or tracking down when a bug was introduced. "
-        "Works for local git repos. GitHub repos are not supported (GitHub REST API "
-        "does not expose blame; use git_log with a file_path filter instead)."
+        "Works for local git repos. Remote repos (GitHub/GitLab/Gitea) are not supported "
+        "— REST APIs don't expose blame; use git_log with a file_path filter instead."
     )
     args_schema: type[BaseModel] = GitBlameInput
     service: Any  # KnowledgeService
@@ -65,9 +65,10 @@ class GitBlameTool(BaseTool):
         if kind == "error":
             return err  # type: ignore[return-value]
 
-        if kind == "github":
+        if kind in ("github", "gitlab", "gitea"):
+            provider = kind.capitalize()
             return (
-                f"git blame is not available for GitHub-hosted repositories via the REST API. "
+                f"git blame is not available for {provider}-hosted repositories via the REST API. "
                 f"Use git_log with file_path='{file_path}' to see which commits touched that file, "
                 "then use git_diff to inspect a specific commit's changes."
             )
