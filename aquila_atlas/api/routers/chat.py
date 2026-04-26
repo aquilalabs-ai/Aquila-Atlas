@@ -64,10 +64,13 @@ def _create_session(
     svc: KnowledgeService,
     title: str = "New Chat",
     extra_tools: list[BaseTool] | None = None,
+    security_store: object | None = None,
 ) -> CodebaseAgent:
     from aquila_atlas.reasoning.agent import CodebaseAgent as _Agent  # noqa: PLC0415
 
-    agent = _Agent(service=svc, repo_id=repo_id, extra_tools=extra_tools)
+    agent = _Agent(
+        service=svc, repo_id=repo_id, extra_tools=extra_tools, security_store=security_store
+    )
     sessions[session_id] = agent
     session_meta[session_id] = _make_meta(session_id, repo_id, title)
     return agent
@@ -81,10 +84,17 @@ def _get_or_create_agent(
     svc: KnowledgeService,
     store: Any = None,
     extra_tools: list[BaseTool] | None = None,
+    security_store: object | None = None,
 ) -> CodebaseAgent:
     if session_id not in sessions:
         agent = _create_session(
-            sessions, session_meta, session_id, repo_id, svc, extra_tools=extra_tools
+            sessions,
+            session_meta,
+            session_id,
+            repo_id,
+            svc,
+            extra_tools=extra_tools,
+            security_store=security_store,
         )
         # Restore persisted state from Valkey (survives server restarts)
         if store is not None:
@@ -149,6 +159,7 @@ async def create_session(
         svc,
         title=req.title,
         extra_tools=getattr(request.app.state, "mcp_tools", None) or None,
+        security_store=getattr(request.app.state, "security_store", None),
     )
     meta = session_meta[session_id]
     if store is not None:
@@ -224,6 +235,7 @@ async def chat(
         svc,
         store=store,
         extra_tools=getattr(request.app.state, "mcp_tools", None) or None,
+        security_store=getattr(request.app.state, "security_store", None),
     )
     meta = session_meta[session_id]
 

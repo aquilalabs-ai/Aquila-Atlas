@@ -4,12 +4,21 @@ import { ThemeProvider } from '@/components/ThemeProvider'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatPanel } from '@/components/ChatPanel'
 import { DocsPanel } from '@/components/DocsPanel'
+import { TestsPanel } from '@/components/TestsPanel'
+import { SecurityPanel } from '@/components/SecurityPanel'
 import { SourceViewer } from '@/components/SourceViewer'
 import { EmptyState } from '@/components/EmptyState'
 import { useAppStore } from '@/store/app'
 import { cn } from '@/lib/utils'
 
-type MainTab = 'chat' | 'docs'
+type MainTab = 'chat' | 'docs' | 'tests' | 'security'
+
+const TAB_LABELS: Record<MainTab, string> = {
+  chat: 'Chat',
+  docs: 'Docs',
+  tests: 'Tests',
+  security: 'Security',
+}
 
 export default function App() {
   const activeRepoId   = useAppStore((s) => s.activeRepoId)
@@ -27,7 +36,7 @@ export default function App() {
             <>
               {/* Tab bar */}
               <div className="flex h-10 flex-shrink-0 items-center border-b border-border-default px-4 gap-0">
-                {(['chat', 'docs'] as const).map((tab) => (
+                {(['chat', 'docs', 'tests', 'security'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setMainTab(tab)}
@@ -38,19 +47,25 @@ export default function App() {
                         : 'text-fg-muted hover:text-fg-default',
                     )}
                   >
-                    {tab === 'chat' ? 'Chat' : 'Docs'}
+                    {TAB_LABELS[tab]}
                   </button>
                 ))}
                 <span className="ml-3 text-xs text-fg-subtle font-medium">{activeRepoId}</span>
               </div>
 
-              {/* Content — both panels stay mounted to avoid aborting in-flight streams */}
+              {/* Content — all panels stay mounted to avoid aborting in-flight streams */}
               <div className="flex flex-1 overflow-hidden">
                 <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'chat' && 'hidden')}>
                   <ChatPanel repoId={activeRepoId} />
                 </div>
                 <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'docs' && 'hidden')}>
                   <DocsPanel repoId={activeRepoId} />
+                </div>
+                <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'tests' && 'hidden')}>
+                  <TestsPanel repoId={activeRepoId} />
+                </div>
+                <div className={cn('flex flex-1 overflow-hidden', mainTab !== 'security' && 'hidden')}>
+                  <SecurityPanel repoId={activeRepoId} />
                 </div>
 
                 {sourceLocation && (

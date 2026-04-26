@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 def get_tools(
     service: KnowledgeService,
     settings: Settings | None = None,
+    security_store: object | None = None,
 ) -> list[BaseTool]:
     """Build all reasoning tools with injected service and LLM client.
 
@@ -38,8 +39,10 @@ def get_tools(
     from .mermaid import MermaidGeneratorTool, ValidateMermaidTool
     from .module_map import ModuleMapTool
     from .repo_overview import RepoOverviewTool
+    from .security import ListFindingsTool, SecurityScanTool
     from .semantic_search import SemanticSearchTool
     from .summary import SummaryTool
+    from .testing import GenerateTestsTool
 
     s = settings or get_settings()
     llm = get_chat_model(s)
@@ -66,4 +69,9 @@ def get_tools(
         GitStatusTool(service=service),
         GitDiffTool(service=service),
         GitBlameTool(service=service),
+        # Test generation — on-demand for a single file or function
+        GenerateTestsTool(service=service, llm=llm),
+        # Security — scan + findings query
+        SecurityScanTool(service=service),
+        ListFindingsTool(security_store=security_store),
     ]

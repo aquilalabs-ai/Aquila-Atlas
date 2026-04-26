@@ -179,6 +179,112 @@ export interface DocContentResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Test generation
+// ---------------------------------------------------------------------------
+
+export type TestScope = 'per_file' | 'per_module' | 'entry_points'
+
+export interface TestGenRequest {
+  scope: TestScope
+  language_filter?: string[]
+  exclude_extensions?: string[]
+}
+
+export interface TestGenResponse {
+  job_id: string
+  repo_id: string
+  status: string
+}
+
+export type TestJobStatusKind = 'queued' | 'running' | 'done' | 'failed'
+
+export interface TestJobStatus {
+  job_id: string
+  repo_id: string
+  scope: string
+  language_filter?: string[]
+  status: TestJobStatusKind
+  completed?: number
+  total?: number
+  current_target?: string
+  error?: string
+  files?: string[]
+}
+
+export interface TestMetadata {
+  job_id: string
+  repo_id: string
+  scope: string
+  language_filter?: string[]
+  created_at: string
+}
+
+export interface TestContentResponse {
+  job_id: string
+  repo_id: string
+  scope: string
+  language_filter?: string[]
+  files: Record<string, string>
+  file_statuses?: Record<string, string>
+}
+
+// ---------------------------------------------------------------------------
+// Security scanning
+// ---------------------------------------------------------------------------
+
+export interface SecurityFinding {
+  file: string
+  line: number
+  rule_id: string
+  severity: 'minor' | 'major' | 'critical'
+  message: string
+  cwe: string
+  owasp_category: string
+  fix_suggestion: string
+  source: 'semgrep' | 'gitleaks' | 'trivy' | 'checkov' | 'llm'
+  confirmed_by_llm: boolean
+}
+
+export interface SecurityScanRequest {
+  source: string
+  token?: string
+  branch?: string
+  semgrep_config?: string
+  run_llm_triage?: boolean
+}
+
+export interface SecurityScanJob {
+  job_id: string
+  repo_id: string
+  source: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  completed: number
+  total: number
+  current_phase: string | null
+  error: string | null
+  severity_counts: Record<string, number>
+}
+
+export interface SecurityReport {
+  job_id: string
+  repo_id: string
+  source: string
+  findings: SecurityFinding[]
+  report: string
+  severity_counts: Record<string, number>
+  tools_used: string[]
+  created_at?: string
+}
+
+export interface SecurityScanMeta {
+  job_id: string
+  repo_id: string
+  source: string
+  severity_counts: Record<string, number>
+  created_at: string
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
@@ -322,10 +428,55 @@ export const api = {
     request<DocJobStatus>(`/repos/${encodeURIComponent(repoId)}/docs/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
   deleteDoc: (repoId: string, jobId: string) =>
     request<{ success: boolean; job_id: string; message: string }>(`/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+  // Test generation
+  generateTests: (repoId: string, req: TestGenRequest) =>
+    request<TestGenResponse>(`/repos/${encodeURIComponent(repoId)}/tests/generate`, {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  getTestJobStatus: (repoId: string, jobId: string) =>
+    request<TestJobStatus>(`/repos/${encodeURIComponent(repoId)}/tests/jobs/${encodeURIComponent(jobId)}`),
+  cancelTestJob: (repoId: string, jobId: string) =>
+    request<TestJobStatus>(`/repos/${encodeURIComponent(repoId)}/tests/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  getTestContent: (repoId: string, jobId: string) =>
+    request<TestContentResponse>(`/repos/${encodeURIComponent(repoId)}/tests/${encodeURIComponent(jobId)}`),
+  listRepoTests: (repoId: string) =>
+    request<{ repo_id: string; tests: TestMetadata[]; total: number }>(`/repos/${encodeURIComponent(repoId)}/tests`),
+  deleteTest: (repoId: string, jobId: string) =>
+    request<{ success: boolean; job_id: string; message: string }>(`/repos/${encodeURIComponent(repoId)}/tests/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+  getTestDownloadUrl: (repoId: string, jobId: string): string => {
+    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+    return `${base}/repos/${encodeURIComponent(repoId)}/tests/${encodeURIComponent(jobId)}/download-zip`
+  },
+
   getDocDownloadUrl: (repoId: string, jobId: string): string => {
     const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
     return `${base}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-zip`
   },
+
+  // Security scanning
+  submitSecurityScan: (repoId: string, req: SecurityScanRequest) =>
+    request<{ job_id: string; repo_id: string; status: string }>(
+      `/repos/${encodeURIComponent(repoId)}/security/scan`,
+      { method: 'POST', body: JSON.stringify(req) },
+    ),
+  getSecurityJobStatus: (repoId: string, jobId: string) =>
+    request<SecurityScanJob>(
+      `/repos/${encodeURIComponent(repoId)}/security/jobs/${encodeURIComponent(jobId)}`,
+    ),
+  getSecurityScan: (repoId: string, jobId: string) =>
+    request<SecurityReport>(
+      `/repos/${encodeURIComponent(repoId)}/security/scans/${encodeURIComponent(jobId)}`,
+    ),
+  listSecurityScans: (repoId: string) =>
+    request<{ repo_id: string; scans: SecurityScanMeta[]; total: number }>(
+      `/repos/${encodeURIComponent(repoId)}/security/scans`,
+    ),
+  deleteSecurityScan: (repoId: string, jobId: string) =>
+    request<{ success: boolean; job_id: string; message: string }>(
+      `/repos/${encodeURIComponent(repoId)}/security/scans/${encodeURIComponent(jobId)}`,
+      { method: 'DELETE' },
+    ),
   downloadDocPdf: async (repoId: string, jobId: string): Promise<Blob> => {
     const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
     const key = import.meta.env.VITE_API_KEY as string | undefined

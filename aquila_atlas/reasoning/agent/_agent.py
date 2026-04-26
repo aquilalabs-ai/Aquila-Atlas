@@ -56,6 +56,7 @@ class CodebaseAgent:
         repo_id: str,
         settings: Settings | None = None,
         extra_tools: list[BaseTool] | None = None,
+        security_store: object | None = None,
     ) -> None:
         from aquila_atlas.config import get_settings  # noqa: PLC0415
         from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
@@ -65,7 +66,9 @@ class CodebaseAgent:
 
         s = settings or get_settings()
         _configure_langsmith(s)
-        self._graph = build_graph(service, s, extra_tools=extra_tools)
+        self._graph = build_graph(
+            service, s, extra_tools=extra_tools, security_store=security_store
+        )
         self._repo_id = repo_id
         self._history: list[BaseMessage] = []
         self._settings = s

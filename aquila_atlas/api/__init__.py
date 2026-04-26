@@ -38,7 +38,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from aquila_atlas.api.routers import chat, docs, files, graph, health, ingestion, repos, search
+from aquila_atlas.api.routers import (
+    chat,
+    docs,
+    files,
+    graph,
+    health,
+    ingestion,
+    repos,
+    search,
+    security,
+    testing,
+)
 
 if TYPE_CHECKING:
     from aquila_atlas.reasoning.agent import CodebaseAgent as CodebaseAgent
@@ -97,6 +108,31 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             "PostgreSQL unavailable — docs will not persist across restarts", exc_info=True
         )
         app.state.doc_store = None
+
+    # Test store — persists generated test scaffolds across restarts
+    from aquila_atlas.api.store import create_test_store  # noqa: PLC0415
+
+    try:
+        app.state.test_store = create_test_store(get_settings().postgres_url)
+        _log.info("Test store connected to PostgreSQL")
+    except Exception:
+        _log.warning(
+            "PostgreSQL unavailable — test sets will not persist across restarts", exc_info=True
+        )
+        app.state.test_store = None
+
+    # Security store — persists security scan results across restarts
+    from aquila_atlas.api.store import create_security_store  # noqa: PLC0415
+
+    try:
+        app.state.security_store = create_security_store(get_settings().postgres_url)
+        _log.info("Security store connected to PostgreSQL")
+    except Exception:
+        _log.warning(
+            "PostgreSQL unavailable — security scans will not persist across restarts",
+            exc_info=True,
+        )
+        app.state.security_store = None
 
     # Load MCP tools once at startup so every chat session gets them
     try:
@@ -176,6 +212,22 @@ _TAG_METADATA = [
             "AI-powered multi-file documentation generation. Submit async jobs with "
             "scope (architecture, per_module, per_file, subsystem, flows), style, and "
             "language. Poll for progress, download as ZIP, and browse saved docs."
+        ),
+    },
+    {
+        "name": "Test Generation",
+        "description": (
+            "AI-powered test scaffold generation. Submit async jobs with scope "
+            "(per_file, per_module, entry_points) and optional language filter. "
+            "Poll for progress, download as ZIP, and browse saved test sets."
+        ),
+    },
+    {
+        "name": "Security",
+        "description": (
+            "Two-layer security scanning: semgrep + gitleaks static analysis followed by "
+            "LLM triage (false-positive filtering, fix suggestions, logic-level vulnerability "
+            "detection). Findings classified as critical / major / minor per OWASP Top 10."
         ),
     },
 ]
@@ -265,6 +317,8 @@ def create_app() -> FastAPI:
     application.include_router(chat.router)
     application.include_router(graph.router)
     application.include_router(docs.router)
+    application.include_router(testing.router)
+    application.include_router(security.router)
 
     return application
 

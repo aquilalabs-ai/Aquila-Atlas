@@ -356,3 +356,343 @@ class DocStore:
 def create_doc_store(postgres_url: str) -> DocStore:
     """Connect to PostgreSQL and return a :class:`DocStore`."""
     return DocStore(postgres_url)
+
+
+# ---------------------------------------------------------------------------
+# TestStore — PostgreSQL-backed test-generation persistence
+# ---------------------------------------------------------------------------
+
+
+class TestStore:
+    """PostgreSQL-backed storage for generated test scaffolds.
+
+    Mirrors DocStore design: synchronous psycopg3, 30-day TTL.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg  # noqa: PLC0415
+
+        self._dsn = dsn
+        self._conn = psycopg.connect(dsn, autocommit=True)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS aquila_tests (
+                job_id          TEXT PRIMARY KEY,
+                repo_id         TEXT NOT NULL,
+                scope           TEXT NOT NULL,
+                language_filter TEXT NOT NULL DEFAULT '[]',
+                files           TEXT NOT NULL DEFAULT '{}',
+                file_statuses   TEXT NOT NULL DEFAULT '{}',
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                expires_at      TIMESTAMPTZ DEFAULT NOW() + INTERVAL '30 days'
+            )
+            """
+        )
+        # Migration: add file_statuses column to existing tables
+        self._conn.execute(
+            """
+            ALTER TABLE aquila_tests
+            ADD COLUMN IF NOT EXISTS file_statuses TEXT NOT NULL DEFAULT '{}'
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aquila_tests_repo_id ON aquila_tests (repo_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aquila_tests_expires_at ON aquila_tests (expires_at)"
+        )
+
+    def _live(self) -> Any:
+        import psycopg  # noqa: PLC0415
+
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            self._conn = psycopg.connect(self._dsn, autocommit=True)
+        return self._conn
+
+    def save_tests(
+        self,
+        job_id: str,
+        repo_id: str,
+        scope: str,
+        language_filter: list[str] | None,
+        files: dict[str, str],
+        file_statuses: dict[str, str] | None = None,
+    ) -> bool:
+        """Persist generated tests. Returns True on success."""
+        try:
+            self._live().execute(
+                """
+                INSERT INTO aquila_tests
+                    (job_id, repo_id, scope, language_filter, files, file_statuses, created_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
+                ON CONFLICT (job_id) DO UPDATE
+                    SET files           = EXCLUDED.files,
+                        file_statuses   = EXCLUDED.file_statuses,
+                        expires_at      = EXCLUDED.expires_at
+                """,
+                (
+                    job_id,
+                    repo_id,
+                    scope,
+                    json.dumps(language_filter or []),
+                    json.dumps(files),
+                    json.dumps(file_statuses or {}),
+                    _TTL,
+                ),
+            )
+            return True
+        except Exception:
+            logger.warning("TestStore.save_tests failed for job_id=%s", job_id, exc_info=True)
+            return False
+
+    def load_tests(self, job_id: str) -> dict[str, Any] | None:
+        row = (
+            self._live()
+            .execute(
+                """
+                SELECT job_id, repo_id, scope, language_filter, files, file_statuses, created_at
+                FROM aquila_tests
+                WHERE job_id = %s AND expires_at > NOW()
+                """,
+                (job_id,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        return {
+            "job_id": row[0],
+            "repo_id": row[1],
+            "scope": row[2],
+            "language_filter": json.loads(row[3]),
+            "files": json.loads(row[4]),
+            "file_statuses": json.loads(row[5]) if row[5] else {},
+            "created_at": row[6].isoformat() if row[6] else None,
+        }
+
+    def list_repo_tests(self, repo_id: str) -> list[dict[str, Any]]:
+        rows = (
+            self._live()
+            .execute(
+                """
+                SELECT job_id, repo_id, scope, language_filter, created_at
+                FROM aquila_tests
+                WHERE repo_id = %s AND expires_at > NOW()
+                ORDER BY created_at DESC
+                """,
+                (repo_id,),
+            )
+            .fetchall()
+        )
+        return [
+            {
+                "job_id": row[0],
+                "repo_id": row[1],
+                "scope": row[2],
+                "language_filter": json.loads(row[3]),
+                "created_at": row[4].isoformat() if row[4] else None,
+            }
+            for row in rows
+        ]
+
+    def delete_tests(self, repo_id: str, job_id: str) -> bool:
+        result = (
+            self._live()
+            .execute(
+                "DELETE FROM aquila_tests WHERE job_id = %s AND repo_id = %s RETURNING job_id",
+                (job_id, repo_id),
+            )
+            .fetchone()
+        )
+        return result is not None
+
+    def delete_all_repo_tests(self, repo_id: str) -> int:
+        cur = self._live().execute(
+            "DELETE FROM aquila_tests WHERE repo_id = %s",
+            (repo_id,),
+        )
+        return cur.rowcount or 0
+
+
+def create_test_store(postgres_url: str) -> TestStore:
+    """Connect to PostgreSQL and return a :class:`TestStore`."""
+    return TestStore(postgres_url)
+
+
+# ---------------------------------------------------------------------------
+# SecurityStore — PostgreSQL-backed security scan persistence
+# ---------------------------------------------------------------------------
+
+
+class SecurityStore:
+    """PostgreSQL-backed storage for security scan results.
+
+    Mirrors DocStore/TestStore design: synchronous psycopg3, 30-day TTL.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg  # noqa: PLC0415
+
+        self._dsn = dsn
+        self._conn = psycopg.connect(dsn, autocommit=True)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS aquila_security_scans (
+                job_id          TEXT PRIMARY KEY,
+                repo_id         TEXT NOT NULL,
+                source          TEXT NOT NULL,
+                findings        TEXT NOT NULL DEFAULT '[]',
+                report          TEXT NOT NULL DEFAULT '',
+                severity_counts TEXT NOT NULL DEFAULT '{}',
+                tools_used      TEXT NOT NULL DEFAULT '[]',
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                expires_at      TIMESTAMPTZ DEFAULT NOW() + INTERVAL '30 days'
+            )
+            """
+        )
+        # Migration: add tools_used column to existing tables
+        self._conn.execute(
+            "ALTER TABLE aquila_security_scans"
+            " ADD COLUMN IF NOT EXISTS tools_used TEXT NOT NULL DEFAULT '[]'"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aquila_security_repo_id"
+            " ON aquila_security_scans (repo_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_aquila_security_expires_at"
+            " ON aquila_security_scans (expires_at)"
+        )
+
+    def _live(self) -> Any:
+        import psycopg  # noqa: PLC0415
+
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            self._conn = psycopg.connect(self._dsn, autocommit=True)
+        return self._conn
+
+    def save_scan(
+        self,
+        job_id: str,
+        repo_id: str,
+        source: str,
+        findings: list[dict[str, Any]],
+        report: str,
+        severity_counts: dict[str, int],
+        tools_used: list[str] | None = None,
+    ) -> bool:
+        try:
+            self._live().execute(
+                """
+                INSERT INTO aquila_security_scans
+                    (job_id, repo_id, source, findings, report, severity_counts,
+                     tools_used, created_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
+                ON CONFLICT (job_id) DO UPDATE
+                    SET findings        = EXCLUDED.findings,
+                        report          = EXCLUDED.report,
+                        severity_counts = EXCLUDED.severity_counts,
+                        tools_used      = EXCLUDED.tools_used,
+                        expires_at      = EXCLUDED.expires_at
+                """,
+                (
+                    job_id,
+                    repo_id,
+                    source,
+                    json.dumps(findings),
+                    report,
+                    json.dumps(severity_counts),
+                    json.dumps(tools_used or []),
+                    _TTL,
+                ),
+            )
+            return True
+        except Exception:
+            logger.warning("SecurityStore.save_scan failed for job_id=%s", job_id, exc_info=True)
+            return False
+
+    def load_scan(self, job_id: str) -> dict[str, Any] | None:
+        row = (
+            self._live()
+            .execute(
+                """
+                SELECT job_id, repo_id, source, findings, report,
+                       severity_counts, tools_used, created_at
+                FROM aquila_security_scans
+                WHERE job_id = %s AND expires_at > NOW()
+                """,
+                (job_id,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        return {
+            "job_id": row[0],
+            "repo_id": row[1],
+            "source": row[2],
+            "findings": json.loads(row[3]),
+            "report": row[4],
+            "severity_counts": json.loads(row[5]),
+            "tools_used": json.loads(row[6]) if row[6] else [],
+            "created_at": row[7].isoformat() if row[7] else None,
+        }
+
+    def list_repo_scans(self, repo_id: str) -> list[dict[str, Any]]:
+        rows = (
+            self._live()
+            .execute(
+                """
+                SELECT job_id, repo_id, source, severity_counts, created_at
+                FROM aquila_security_scans
+                WHERE repo_id = %s AND expires_at > NOW()
+                ORDER BY created_at DESC
+                """,
+                (repo_id,),
+            )
+            .fetchall()
+        )
+        return [
+            {
+                "job_id": row[0],
+                "repo_id": row[1],
+                "source": row[2],
+                "severity_counts": json.loads(row[3]),
+                "created_at": row[4].isoformat() if row[4] else None,
+            }
+            for row in rows
+        ]
+
+    def delete_scan(self, repo_id: str, job_id: str) -> bool:
+        result = (
+            self._live()
+            .execute(
+                "DELETE FROM aquila_security_scans"
+                " WHERE job_id = %s AND repo_id = %s RETURNING job_id",
+                (job_id, repo_id),
+            )
+            .fetchone()
+        )
+        return result is not None
+
+    def delete_all_repo_scans(self, repo_id: str) -> int:
+        cur = self._live().execute(
+            "DELETE FROM aquila_security_scans WHERE repo_id = %s",
+            (repo_id,),
+        )
+        return cur.rowcount or 0
+
+
+def create_security_store(postgres_url: str) -> SecurityStore:
+    """Connect to PostgreSQL and return a :class:`SecurityStore`."""
+    return SecurityStore(postgres_url)

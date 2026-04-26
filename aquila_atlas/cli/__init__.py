@@ -114,6 +114,81 @@ def search(
         typer.echo(f"    {preview}{'...' if len(r.content) > 200 else ''}")
 
 
+@app.command(name="tests")
+def generate_tests(
+    repo: str = typer.Option(..., "--repo", "-r", help="Repository ID"),
+    scope: str = typer.Option(
+        "per_file",
+        "--scope",
+        "-s",
+        help="per_file | per_module | entry_points",
+    ),
+    lang: str | None = typer.Option(
+        None,
+        "--lang",
+        "-l",
+        help="Comma-separated language filter (e.g. python,typescript). Omit for all languages.",
+    ),
+    output_dir: str = typer.Option(
+        ".",
+        "--output-dir",
+        "-o",
+        help="Directory to write generated test files (default: current directory).",
+    ),
+) -> None:
+    """Generate AI-powered test scaffolds for an ingested repository."""
+    import pathlib  # noqa: PLC0415
+
+    from aquila_atlas.knowledge.service import get_knowledge_service  # noqa: PLC0415
+    from aquila_atlas.testing import generate_tests as _generate  # noqa: PLC0415
+
+    language_filter: list[str] | None = (
+        [item.strip() for item in lang.split(",") if item.strip()] if lang else None
+    )
+
+    svc = get_knowledge_service()
+    completed_count = 0
+    total_count = 0
+
+    def _progress(completed: int, total: int, current: str | None) -> None:
+        nonlocal completed_count, total_count
+        completed_count = completed
+        total_count = total
+        if current:
+            typer.echo(f"  [{completed}/{total}] {current}", err=False)
+
+    typer.echo(
+        f"Generating tests — repo: {repo}  scope: {scope}"
+        + (f"  lang: {', '.join(language_filter)}" if language_filter else "")
+    )
+
+    try:
+        files, _ = _generate(
+            svc=svc,
+            repo_id=repo,
+            scope=scope,  # type: ignore[arg-type]
+            language_filter=language_filter,
+            progress_callback=_progress,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    if not files:
+        typer.echo("No test files generated.")
+        raise typer.Exit()
+
+    out_root = pathlib.Path(output_dir)
+    written = 0
+    for rel_path, content in files.items():
+        dest = out_root / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        written += 1
+
+    typer.echo(f"\nDone — {written} test file(s) written to '{out_root}'.")
+
+
 @app.command()
 def serve(
     host: str = typer.Option("", "--host", "-H", help="Bind host (overrides API_HOST setting)"),
@@ -202,3 +277,69 @@ async def _chat_async(repo: str, no_stream: bool, no_mcp: bool) -> None:
             async for token in agent.astream(query):
                 typer.echo(token, nl=False)
             typer.echo("")  # newline after streamed response
+
+
+@app.command(name="security")
+def security(
+    repo: str = typer.Option(..., "--repo", "-r", help="Repository ID for context lookup"),
+    source: str = typer.Argument(..., help="Local file path or directory to scan"),
+    config: str = typer.Option(
+        "auto", "--config", "-c", help="Semgrep rule config (default: auto)"
+    ),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM triage pass"),
+) -> None:
+    """Run a security scan on a local file or directory."""
+    from aquila_atlas.knowledge.service import get_knowledge_service  # noqa: PLC0415
+    from aquila_atlas.security.scanner import scan  # noqa: PLC0415
+
+    _SEV_COLOR = {
+        "critical": (typer.colors.RED, True),
+        "major": (typer.colors.YELLOW, False),
+        "minor": (typer.colors.CYAN, False),
+    }
+    _SEV_EMOJI = {"critical": "🔴", "major": "🟠", "minor": "🔵"}
+
+    typer.echo(f"Scanning {source!r} for repo '{repo}' …")
+    svc = get_knowledge_service()
+    try:
+        result = scan(
+            source=source,
+            repo_id=repo,
+            svc=svc,
+            semgrep_config=config,
+            run_llm_triage=not no_llm,
+        )
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(typer.style(f"Scan failed: {exc}", fg=typer.colors.RED, bold=True), err=True)
+        raise typer.Exit(1) from exc
+
+    counts = result.severity_counts()
+    typer.echo("")
+
+    if not result.findings:
+        typer.echo(typer.style("✅  No findings detected.", fg=typer.colors.GREEN, bold=True))
+        return
+
+    ordered = sorted(
+        result.findings,
+        key=lambda f: {"critical": 0, "major": 1, "minor": 2}.get(f.severity, 2),
+    )
+    for finding in ordered:
+        color, bold = _SEV_COLOR.get(finding.severity, (typer.colors.WHITE, False))
+        emoji = _SEV_EMOJI.get(finding.severity, "•")
+        header = f"{emoji}  {finding.severity.upper()}  {finding.file}:{finding.line}  [{finding.rule_id}]"
+        typer.echo(typer.style(header, fg=color, bold=bold))
+        typer.echo(f"   OWASP: {finding.owasp_category}")
+        typer.echo(f"   {finding.message}")
+        if finding.fix_suggestion:
+            typer.echo(f"   Fix: {finding.fix_suggestion[:200]}")
+        typer.echo("")
+
+    typer.echo("─" * 60)
+    typer.echo(
+        typer.style(f"🔴 Critical: {counts.get('critical', 0)}", fg=typer.colors.RED, bold=True)
+        + "  "
+        + typer.style(f"🟠 Major: {counts.get('major', 0)}", fg=typer.colors.YELLOW)
+        + "  "
+        + typer.style(f"🔵 Minor: {counts.get('minor', 0)}", fg=typer.colors.CYAN)
+    )

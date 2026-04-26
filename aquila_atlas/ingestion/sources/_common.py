@@ -160,6 +160,44 @@ class RawFile:
 # ---------------------------------------------------------------------------
 
 
+def temporary_clone(url: str, token: str = "", branch: str = "") -> Iterator[str]:
+    """Context manager that yields a local filesystem path for any git source.
+
+    - Local paths are yielded directly (no clone, no cleanup).
+    - HTTP/HTTPS/SSH/git URLs are shallow-cloned into a ``TemporaryDirectory``
+      that is automatically deleted on exit.
+
+    Usage::
+
+        with temporary_clone("https://github.com/owner/repo.git", token="...") as path:
+            run_semgrep(path)
+    """
+    import contextlib  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    from aquila_atlas.ingestion.sources.git_clone import GitCloneLoader  # noqa: PLC0415
+
+    _REMOTE_SCHEMES = ("http://", "https://", "git@", "ssh://", "git://")
+    is_remote = any(url.startswith(s) for s in _REMOTE_SCHEMES)
+
+    if not is_remote:
+        # Local path — yield directly, no cleanup needed
+        with contextlib.nullcontext(url) as local_path:
+            yield local_path
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        loader = GitCloneLoader(url, token=token, branch=branch)
+        loader._clone_into(tmpdir)
+        yield tmpdir
+
+
+# Python ≥ 3.9: make temporary_clone usable as a contextmanager at import time
+from contextlib import contextmanager as _contextmanager  # noqa: E402
+
+temporary_clone = _contextmanager(temporary_clone)  # type: ignore[assignment]
+
+
 class SourceLoader(Protocol):
     """Common interface every source loader must implement."""
 

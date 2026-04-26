@@ -841,6 +841,391 @@ class DocDeleteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Test generation
+# ---------------------------------------------------------------------------
+
+
+class TestGenRequest(BaseModel):
+    scope: str = Field(
+        "per_file",
+        description='Test scope: "per_file" | "per_module" | "entry_points"',
+    )
+    language_filter: list[str] | None = Field(
+        None,
+        description=(
+            "Restrict generation to specific languages "
+            '(e.g. ["python", "typescript"]). Null = all supported languages.'
+        ),
+    )
+    exclude_extensions: list[str] | None = Field(
+        None,
+        description=(
+            'File extensions to skip (e.g. [".md", ".png"]). '
+            "Null = built-in defaults. [] = no extension filtering."
+        ),
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"scope": "per_file", "language_filter": ["python"], "exclude_extensions": None},
+                {"scope": "per_module", "language_filter": None, "exclude_extensions": None},
+                {
+                    "scope": "entry_points",
+                    "language_filter": ["typescript"],
+                    "exclude_extensions": None,
+                },
+            ]
+        }
+    }
+
+
+class TestGenResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    status: str = Field(..., description='"queued" immediately after submission')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "status": "queued",
+                }
+            ]
+        }
+    }
+
+
+class TestJobStatus(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    language_filter: list[str] | None
+    status: str = Field(..., description='"queued" | "running" | "done" | "failed"')
+    completed: int = Field(0)
+    total: int = Field(0)
+    current_target: str | None = Field(None)
+    error: str | None = Field(None)
+    files: list[str] = Field(
+        default_factory=list, description="Generated file paths (populated on done)"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "per_file",
+                    "language_filter": ["python"],
+                    "status": "running",
+                    "completed": 3,
+                    "total": 12,
+                    "current_target": "aquila_atlas/config.py",
+                    "error": None,
+                    "files": [],
+                }
+            ]
+        }
+    }
+
+
+class TestContentResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    language_filter: list[str] | None
+    files: dict[str, str] = Field(..., description="output_path → test code content")
+    file_statuses: dict[str, str] | None = Field(
+        None,
+        description=(
+            'output_path → validation status: "validated" | "syntax-only" | "unvalidated"'
+        ),
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "per_file",
+                    "language_filter": None,
+                    "files": {"tests/aquila_atlas/test_config.py": "import pytest\n..."},
+                    "file_statuses": {"tests/aquila_atlas/test_config.py": "validated"},
+                }
+            ]
+        }
+    }
+
+
+class TestMetadata(BaseModel):
+    job_id: str
+    repo_id: str
+    scope: str
+    language_filter: list[str] | None
+    created_at: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "scope": "per_file",
+                    "language_filter": None,
+                    "created_at": "2026-04-25T10:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class TestListResponse(BaseModel):
+    repo_id: str
+    tests: list[TestMetadata]
+    total: int
+
+    model_config = {
+        "json_schema_extra": {"examples": [{"repo_id": "my-service", "tests": [], "total": 0}]}
+    }
+
+
+class TestDeleteResponse(BaseModel):
+    success: bool
+    job_id: str
+    message: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "message": "Deleted",
+                }
+            ]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Security scanning
+# ---------------------------------------------------------------------------
+
+
+class SecurityScanRequest(BaseModel):
+    source: str = Field(
+        ...,
+        description=(
+            "Local directory path or remote git URL to scan. "
+            "Example: '/home/user/myproject' or 'https://github.com/owner/repo'"
+        ),
+    )
+    token: str = Field(
+        "",
+        description="OAuth/PAT token for private remote repos (ignored for local paths).",
+    )
+    branch: str = Field("", description="Branch or tag to check out (remote clones only).")
+    semgrep_config: str = Field(
+        "auto",
+        description=(
+            "Semgrep rule config (default 'auto' = Semgrep registry auto-select). "
+            "Example: 'p/owasp-top-ten', 'p/python', or a local rules file path."
+        ),
+    )
+    run_llm_triage: bool = Field(
+        True,
+        description="Run LLM false-positive filtering and logic-vulnerability detection.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "source": "/home/user/myproject",
+                    "token": "",
+                    "branch": "",
+                    "semgrep_config": "auto",
+                    "run_llm_triage": True,
+                },
+                {
+                    "source": "https://github.com/owner/repo",
+                    "token": "ghp_...",
+                    "branch": "main",
+                    "semgrep_config": "p/owasp-top-ten",
+                    "run_llm_triage": True,
+                },
+            ]
+        }
+    }
+
+
+class SecurityScanResponse(BaseModel):
+    job_id: str
+    repo_id: str
+    status: str = Field(..., description='"queued" immediately after submission')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "status": "queued",
+                }
+            ]
+        }
+    }
+
+
+class FindingSummary(BaseModel):
+    file: str
+    line: int
+    rule_id: str
+    severity: str = Field(..., description='"minor" | "major" | "critical"')
+    message: str
+    cwe: str = ""
+    owasp_category: str = ""
+    fix_suggestion: str = ""
+    source: str = Field(..., description='"semgrep" | "gitleaks" | "trivy" | "checkov" | "llm"')
+    confirmed_by_llm: bool = False
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "file": "src/auth/service.py",
+                    "line": 42,
+                    "rule_id": "python.django.security.injection.tainted-sql-string",
+                    "severity": "critical",
+                    "message": "Possible SQL injection via untrusted input",
+                    "cwe": "CWE-89",
+                    "owasp_category": "A03 - Injection",
+                    "fix_suggestion": "Use parameterised queries instead of string formatting.",
+                    "source": "semgrep",
+                    "confirmed_by_llm": True,
+                }
+            ]
+        }
+    }
+
+
+class SecurityScanJob(BaseModel):
+    job_id: str
+    repo_id: str
+    source: str
+    status: str = Field(..., description='"queued" | "running" | "done" | "failed"')
+    completed: int = Field(0)
+    total: int = Field(4, description="Always 4 phases: resolve, scan, triage, report")
+    current_phase: str | None = Field(None)
+    error: str | None = Field(None)
+    severity_counts: dict[str, int] = Field(
+        default_factory=dict, description="{critical: N, major: N, minor: N}"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "source": "/home/user/project",
+                    "status": "running",
+                    "completed": 2,
+                    "total": 4,
+                    "current_phase": "Running LLM triage…",
+                    "error": None,
+                    "severity_counts": {},
+                }
+            ]
+        }
+    }
+
+
+class SecurityReport(BaseModel):
+    job_id: str
+    repo_id: str
+    source: str
+    findings: list[FindingSummary]
+    report: str = Field(..., description="Full Markdown report")
+    severity_counts: dict[str, int]
+    tools_used: list[str] = Field(
+        default_factory=list,
+        description='Tools that ran: ["semgrep", "gitleaks", "LLM triage"]',
+    )
+    created_at: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "source": "/home/user/project",
+                    "findings": [],
+                    "report": "# Security Scan Report…",
+                    "severity_counts": {"critical": 0, "major": 2, "minor": 5},
+                    "created_at": "2026-04-25T10:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class SecurityScanMeta(BaseModel):
+    job_id: str
+    repo_id: str
+    source: str
+    severity_counts: dict[str, int]
+    created_at: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "repo_id": "my-service",
+                    "source": "/home/user/project",
+                    "severity_counts": {"critical": 1, "major": 3, "minor": 7},
+                    "created_at": "2026-04-25T10:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class SecurityScanListResponse(BaseModel):
+    repo_id: str
+    scans: list[SecurityScanMeta]
+    total: int
+
+    model_config = {
+        "json_schema_extra": {"examples": [{"repo_id": "my-service", "scans": [], "total": 0}]}
+    }
+
+
+class SecurityDeleteResponse(BaseModel):
+    success: bool
+    job_id: str
+    message: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "success": True,
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "message": "Deleted",
+                }
+            ]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # Errors  (used via HTTPException — documented here for Swagger)
 # ---------------------------------------------------------------------------
 
