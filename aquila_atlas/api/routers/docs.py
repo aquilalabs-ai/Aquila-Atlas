@@ -26,7 +26,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
+from aquila_atlas.api.deps import Auth, CurrentUser, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
     DocContentResponse,
     DocDeleteResponse,
@@ -47,7 +47,19 @@ router = APIRouter(prefix="/repos/{repo_id}", tags=["Documentation"])
 
 DocJobStatusLiteral = Literal["queued", "running", "done", "failed"]
 
-_valid_scopes = {"architecture", "per_module", "per_file", "subsystem", "flows"}
+_valid_scopes = {
+    "architecture",
+    "per_module",
+    "per_file",
+    "subsystem",
+    "flows",
+    "user_guide",
+    "developer_guide",
+}
+
+
+def _uid(user: dict | None) -> str:  # type: ignore[type-arg]
+    return user["id"] if user is not None else ""
 
 
 @dataclass
@@ -65,6 +77,7 @@ class DocJobRecord:
     error: str | None = None
     cancelled: bool = False
     exclude_extensions: list[str] | None = None
+    user_id: str = ""
 
 
 _doc_jobs: dict[str, DocJobRecord] = {}
@@ -155,6 +168,7 @@ def _persist_doc(record: DocJobRecord, doc_store: object) -> None:
             style=record.style,
             language=record.language,
             files=record.files,
+            user_id=record.user_id,
         )
 
 
@@ -222,6 +236,7 @@ async def generate_docs_endpoint(
     request: Request,
     svc: Svc,
     _auth: Auth,
+    user: CurrentUser,
 ) -> DocGenResponse:
     if body.scope not in _valid_scopes:
         raise HTTPException(
@@ -236,6 +251,7 @@ async def generate_docs_endpoint(
         style=body.style,
         language=body.language,
         exclude_extensions=body.exclude_extensions,
+        user_id=_uid(user),
     )
     _doc_jobs[job_id] = record
     doc_store = getattr(request.app.state, "doc_store", None)
@@ -280,6 +296,7 @@ async def list_repo_docs(
     repo_id: str,
     request: Request,
     _auth: Auth,
+    user: CurrentUser,
 ) -> DocListResponse:
     doc_store = getattr(request.app.state, "doc_store", None)
     if doc_store is None:
@@ -288,7 +305,8 @@ async def list_repo_docs(
 
     if not isinstance(doc_store, DocStore):
         return DocListResponse(repo_id=repo_id, docs=[], total=0)
-    rows = doc_store.list_repo_docs(repo_id)
+    uid = _uid(user)
+    rows = doc_store.list_repo_docs(repo_id, user_id=uid)
     docs = [DocMetadata(**row) for row in rows]
     return DocListResponse(repo_id=repo_id, docs=docs, total=len(docs))
 

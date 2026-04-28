@@ -22,7 +22,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
+from aquila_atlas.api.deps import Auth, CurrentUser, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
     TestContentResponse,
     TestDeleteResponse,
@@ -46,6 +46,10 @@ _valid_scopes = {"per_file", "per_module", "entry_points"}
 TestJobStatusLiteral = Literal["queued", "running", "done", "failed"]
 
 
+def _uid(user: dict | None) -> str:  # type: ignore[type-arg]
+    return user["id"] if user is not None else ""
+
+
 @dataclass
 class TestJobRecord:
     job_id: str
@@ -61,6 +65,7 @@ class TestJobRecord:
     error: str | None = None
     cancelled: bool = False
     exclude_extensions: list[str] | None = None
+    user_id: str = ""
 
 
 _test_jobs: dict[str, TestJobRecord] = {}
@@ -117,6 +122,7 @@ def _persist_tests(record: TestJobRecord, test_store: object) -> None:
             language_filter=record.language_filter,
             files=record.files,
             file_statuses=record.file_statuses or None,
+            user_id=record.user_id,
         )
 
 
@@ -183,6 +189,7 @@ async def generate_tests_endpoint(
     request: Request,
     svc: Svc,
     _auth: Auth,
+    user: CurrentUser,
 ) -> TestGenResponse:
     if body.scope not in _valid_scopes:
         raise HTTPException(
@@ -196,6 +203,7 @@ async def generate_tests_endpoint(
         scope=body.scope,
         language_filter=body.language_filter,
         exclude_extensions=body.exclude_extensions,
+        user_id=_uid(user),
     )
     _test_jobs[job_id] = record
     test_store = getattr(request.app.state, "test_store", None)
@@ -272,6 +280,7 @@ async def list_repo_tests(
     repo_id: str,
     request: Request,
     _auth: Auth,
+    user: CurrentUser,
 ) -> TestListResponse:
     test_store = getattr(request.app.state, "test_store", None)
     if test_store is None:
@@ -280,7 +289,8 @@ async def list_repo_tests(
 
     if not isinstance(test_store, TestStore):
         return TestListResponse(repo_id=repo_id, tests=[], total=0)
-    rows = test_store.list_repo_tests(repo_id)
+    uid = _uid(user)
+    rows = test_store.list_repo_tests(repo_id, user_id=uid)
     tests = [TestMetadata(**row) for row in rows]
     return TestListResponse(repo_id=repo_id, tests=tests, total=len(tests))
 

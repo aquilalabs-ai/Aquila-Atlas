@@ -57,6 +57,9 @@ class SessionStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_aquila_sessions_repo ON aquila_sessions (repo_id)"
         )
+        self._conn.execute(
+            "ALTER TABLE aquila_sessions ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+        )
 
     def _live(self) -> Any:
         """Return a live connection, reconnecting if the previous one dropped."""
@@ -73,14 +76,15 @@ class SessionStore:
     def save_meta(self, session_id: str, meta: dict[str, Any]) -> None:
         self._live().execute(
             """
-            INSERT INTO aquila_sessions (session_id, repo_id, meta, history, expires_at)
-            VALUES (%s, %s, %s, '[]', NOW() + %s::INTERVAL)
+            INSERT INTO aquila_sessions (session_id, repo_id, user_id, meta, history, expires_at)
+            VALUES (%s, %s, %s, %s, '[]', NOW() + %s::INTERVAL)
             ON CONFLICT (session_id) DO UPDATE
                 SET meta       = EXCLUDED.meta,
                     repo_id    = EXCLUDED.repo_id,
+                    user_id    = EXCLUDED.user_id,
                     expires_at = EXCLUDED.expires_at
             """,
-            (session_id, meta.get("repo_id", ""), json.dumps(meta), _TTL),
+            (session_id, meta.get("repo_id", ""), meta.get("user_id", ""), json.dumps(meta), _TTL),
         )
 
     def load_meta(self, session_id: str) -> dict[str, Any] | None:
@@ -96,16 +100,30 @@ class SessionStore:
             return None
         return json.loads(row[0])  # type: ignore[no-any-return]
 
-    def list_repo_sessions(self, repo_id: str) -> list[dict[str, Any]]:
-        """Return metadata for every non-expired session belonging to *repo_id*."""
-        rows = (
-            self._live()
-            .execute(
-                "SELECT meta FROM aquila_sessions WHERE repo_id = %s AND expires_at > NOW()",
-                (repo_id,),
+    def list_repo_sessions(self, repo_id: str, user_id: str = "") -> list[dict[str, Any]]:
+        """Return metadata for every non-expired session belonging to *repo_id*.
+
+        When *user_id* is provided only sessions owned by that user are returned.
+        """
+        if user_id:
+            rows = (
+                self._live()
+                .execute(
+                    "SELECT meta FROM aquila_sessions"
+                    " WHERE repo_id = %s AND user_id = %s AND expires_at > NOW()",
+                    (repo_id, user_id),
+                )
+                .fetchall()
             )
-            .fetchall()
-        )
+        else:
+            rows = (
+                self._live()
+                .execute(
+                    "SELECT meta FROM aquila_sessions WHERE repo_id = %s AND expires_at > NOW()",
+                    (repo_id,),
+                )
+                .fetchall()
+            )
         return [json.loads(row[0]) for row in rows]
 
     def count_sessions(self, repo_id: str | None = None) -> int:
@@ -242,6 +260,9 @@ class DocStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_aquila_docs_expires_at ON aquila_docs (expires_at)"
         )
+        self._conn.execute(
+            "ALTER TABLE aquila_docs ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+        )
 
     def _live(self) -> Any:
         import psycopg  # noqa: PLC0415
@@ -260,19 +281,21 @@ class DocStore:
         style: str,
         language: str,
         files: dict[str, str],
+        user_id: str = "",
     ) -> bool:
         """Persist generated docs. Returns True on success."""
         try:
             self._live().execute(
                 """
-                INSERT INTO aquila_docs (job_id, repo_id, scope, style, language, files,
+                INSERT INTO aquila_docs (job_id, repo_id, user_id, scope, style, language, files,
                                          created_at, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
                 ON CONFLICT (job_id) DO UPDATE
                     SET files      = EXCLUDED.files,
+                        user_id    = EXCLUDED.user_id,
                         expires_at = EXCLUDED.expires_at
                 """,
-                (job_id, repo_id, scope, style, language, json.dumps(files), _TTL),
+                (job_id, repo_id, user_id, scope, style, language, json.dumps(files), _TTL),
             )
             return True
         except Exception:
@@ -305,21 +328,39 @@ class DocStore:
             "created_at": row[6].isoformat() if row[6] else None,
         }
 
-    def list_repo_docs(self, repo_id: str) -> list[dict[str, Any]]:
-        """Return metadata (no file content) for all non-expired docs in *repo_id*."""
-        rows = (
-            self._live()
-            .execute(
-                """
-                SELECT job_id, repo_id, scope, style, language, created_at
-                FROM aquila_docs
-                WHERE repo_id = %s AND expires_at > NOW()
-                ORDER BY created_at DESC
-                """,
-                (repo_id,),
+    def list_repo_docs(self, repo_id: str, user_id: str = "") -> list[dict[str, Any]]:
+        """Return metadata (no file content) for all non-expired docs in *repo_id*.
+
+        When *user_id* is provided only docs owned by that user are returned.
+        """
+        if user_id:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, scope, style, language, created_at
+                    FROM aquila_docs
+                    WHERE repo_id = %s AND user_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id, user_id),
+                )
+                .fetchall()
             )
-            .fetchall()
-        )
+        else:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, scope, style, language, created_at
+                    FROM aquila_docs
+                    WHERE repo_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id,),
+                )
+                .fetchall()
+            )
         return [
             {
                 "job_id": row[0],
@@ -399,6 +440,9 @@ class TestStore:
             """
         )
         self._conn.execute(
+            "ALTER TABLE aquila_tests ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+        )
+        self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_aquila_tests_repo_id ON aquila_tests (repo_id)"
         )
         self._conn.execute(
@@ -422,22 +466,26 @@ class TestStore:
         language_filter: list[str] | None,
         files: dict[str, str],
         file_statuses: dict[str, str] | None = None,
+        user_id: str = "",
     ) -> bool:
         """Persist generated tests. Returns True on success."""
         try:
             self._live().execute(
                 """
                 INSERT INTO aquila_tests
-                    (job_id, repo_id, scope, language_filter, files, file_statuses, created_at, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
+                    (job_id, repo_id, user_id, scope, language_filter, files, file_statuses,
+                     created_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
                 ON CONFLICT (job_id) DO UPDATE
                     SET files           = EXCLUDED.files,
                         file_statuses   = EXCLUDED.file_statuses,
+                        user_id         = EXCLUDED.user_id,
                         expires_at      = EXCLUDED.expires_at
                 """,
                 (
                     job_id,
                     repo_id,
+                    user_id,
                     scope,
                     json.dumps(language_filter or []),
                     json.dumps(files),
@@ -475,20 +523,39 @@ class TestStore:
             "created_at": row[6].isoformat() if row[6] else None,
         }
 
-    def list_repo_tests(self, repo_id: str) -> list[dict[str, Any]]:
-        rows = (
-            self._live()
-            .execute(
-                """
-                SELECT job_id, repo_id, scope, language_filter, created_at
-                FROM aquila_tests
-                WHERE repo_id = %s AND expires_at > NOW()
-                ORDER BY created_at DESC
-                """,
-                (repo_id,),
+    def list_repo_tests(self, repo_id: str, user_id: str = "") -> list[dict[str, Any]]:
+        """Return metadata for all non-expired test sets in *repo_id*.
+
+        When *user_id* is provided only test sets owned by that user are returned.
+        """
+        if user_id:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, scope, language_filter, created_at
+                    FROM aquila_tests
+                    WHERE repo_id = %s AND user_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id, user_id),
+                )
+                .fetchall()
             )
-            .fetchall()
-        )
+        else:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, scope, language_filter, created_at
+                    FROM aquila_tests
+                    WHERE repo_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id,),
+                )
+                .fetchall()
+            )
         return [
             {
                 "job_id": row[0],
@@ -564,6 +631,10 @@ class SecurityStore:
             " ADD COLUMN IF NOT EXISTS tools_used TEXT NOT NULL DEFAULT '[]'"
         )
         self._conn.execute(
+            "ALTER TABLE aquila_security_scans"
+            " ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+        )
+        self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_aquila_security_repo_id"
             " ON aquila_security_scans (repo_id)"
         )
@@ -590,24 +661,27 @@ class SecurityStore:
         report: str,
         severity_counts: dict[str, int],
         tools_used: list[str] | None = None,
+        user_id: str = "",
     ) -> bool:
         try:
             self._live().execute(
                 """
                 INSERT INTO aquila_security_scans
-                    (job_id, repo_id, source, findings, report, severity_counts,
+                    (job_id, repo_id, user_id, source, findings, report, severity_counts,
                      tools_used, created_at, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW() + %s::INTERVAL)
                 ON CONFLICT (job_id) DO UPDATE
                     SET findings        = EXCLUDED.findings,
                         report          = EXCLUDED.report,
                         severity_counts = EXCLUDED.severity_counts,
                         tools_used      = EXCLUDED.tools_used,
+                        user_id         = EXCLUDED.user_id,
                         expires_at      = EXCLUDED.expires_at
                 """,
                 (
                     job_id,
                     repo_id,
+                    user_id,
                     source,
                     json.dumps(findings),
                     report,
@@ -648,20 +722,39 @@ class SecurityStore:
             "created_at": row[7].isoformat() if row[7] else None,
         }
 
-    def list_repo_scans(self, repo_id: str) -> list[dict[str, Any]]:
-        rows = (
-            self._live()
-            .execute(
-                """
-                SELECT job_id, repo_id, source, severity_counts, created_at
-                FROM aquila_security_scans
-                WHERE repo_id = %s AND expires_at > NOW()
-                ORDER BY created_at DESC
-                """,
-                (repo_id,),
+    def list_repo_scans(self, repo_id: str, user_id: str = "") -> list[dict[str, Any]]:
+        """Return metadata for all non-expired scans in *repo_id*.
+
+        When *user_id* is provided only scans owned by that user are returned.
+        """
+        if user_id:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, source, severity_counts, created_at
+                    FROM aquila_security_scans
+                    WHERE repo_id = %s AND user_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id, user_id),
+                )
+                .fetchall()
             )
-            .fetchall()
-        )
+        else:
+            rows = (
+                self._live()
+                .execute(
+                    """
+                    SELECT job_id, repo_id, source, severity_counts, created_at
+                    FROM aquila_security_scans
+                    WHERE repo_id = %s AND expires_at > NOW()
+                    ORDER BY created_at DESC
+                    """,
+                    (repo_id,),
+                )
+                .fetchall()
+            )
         return [
             {
                 "job_id": row[0],

@@ -11,7 +11,7 @@ export default defineConfig({
     port: 3000,
     // Proxy API calls to the FastAPI backend in dev — no CORS setup needed
     proxy: {
-      '^/(repos|jobs|health)': {
+      '^/(repos|jobs|health|auth|admin)': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },

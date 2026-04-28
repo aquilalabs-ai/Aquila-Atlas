@@ -294,7 +294,16 @@ class CodebaseAgent:
                 accumulated = await self._retry_bare_async()
                 if accumulated:
                     yield {"token": accumulated}
-            self._history.append(AIMessage(content=accumulated))
+            if accumulated:
+                self._history.append(AIMessage(content=accumulated))
+            else:
+                # Roll back the HumanMessage so history stays consistent and
+                # the next attempt doesn't inherit a trailing empty AI turn.
+                if self._history and isinstance(self._history[-1], HumanMessage):
+                    self._history.pop()
+                logger.warning(
+                    "agent[astream_with_status] no response produced — rolling back history"
+                )
 
     async def achat(self, query: str) -> str:
         """Async version of :meth:`chat` — required when MCP tools are active.
@@ -410,7 +419,12 @@ class CodebaseAgent:
             accumulated = await self._retry_bare_async()
             if accumulated:
                 yield accumulated
-        self._history.append(AIMessage(content=accumulated))
+        if accumulated:
+            self._history.append(AIMessage(content=accumulated))
+        else:
+            if self._history and isinstance(self._history[-1], HumanMessage):
+                self._history.pop()
+            logger.warning("agent[astream] no response produced — rolling back history")
 
     # ------------------------------------------------------------------
     # Bare-LLM retry helpers

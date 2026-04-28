@@ -4,25 +4,154 @@
  * In production, set VITE_API_URL to the deployed backend URL.
  */
 
+// store/app.ts only has `import type` from api.ts — no runtime circular dependency.
+import { useAppStore } from '@/store/app'
+
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
 
 function authHeaders(): Record<string, string> {
   const key = import.meta.env.VITE_API_KEY as string | undefined
   const h: Record<string, string> = { 'Content-Type': 'application/json' }
   if (key) h['X-API-Key'] = key
+  const token = useAppStore.getState().authToken
+  if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// Shared promise: all concurrent 401 handlers await the same refresh instead of
+// returning false immediately and calling clearAuth() while the refresh is in flight.
+let _refreshPromise: Promise<boolean> | null = null
+
+async function tryRefresh(): Promise<boolean> {
+  if (_refreshPromise) return _refreshPromise
+  _refreshPromise = (async (): Promise<boolean> => {
+    const { authRefreshToken, clearAuth } = useAppStore.getState()
+    if (!authRefreshToken) { clearAuth(); return false }
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: authRefreshToken }),
+      })
+      if (!res.ok) { clearAuth(); return false }
+      const data = await res.json() as TokenResponse
+      const { setAuth, authUser } = useAppStore.getState()
+      setAuth(data.access_token, data.refresh_token, {
+        user_id: data.user_id,
+        email: data.email,
+        display_name: authUser?.display_name ?? '',
+        role: data.role,
+        auth_mode: authUser?.auth_mode ?? '',
+      })
+      return true
+    } catch {
+      useAppStore.getState().clearAuth()
+      return false
+    }
+  })().finally(() => { _refreshPromise = null })
+  return _refreshPromise
+}
+
+async function request<T>(path: string, init?: RequestInit, _isRetry = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers: { ...authHeaders(), ...(init?.headers ?? {}) },
   })
+  if (res.status === 401 && !_isRetry) {
+    const refreshed = await tryRefresh()
+    if (refreshed) return request<T>(path, init, true)
+    // tryRefresh already called clearAuth() on failure — fall through to throw
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(text)
   }
   return res.json() as Promise<T>
+}
+
+// ---------------------------------------------------------------------------
+// Auth types
+// ---------------------------------------------------------------------------
+
+export interface AuthUser {
+  user_id: string
+  email: string
+  display_name: string
+  role: string
+  auth_mode: string
+}
+
+export interface TokenResponse {
+  access_token: string
+  refresh_token: string
+  token_type: string
+  user_id: string
+  email: string
+  role: string
+}
+
+export interface LicenseStatus {
+  valid: boolean
+  customer_id: string
+  customer_name: string
+  max_seats: number
+  seats_used: number
+  seats_available: number
+  expires_at: string
+}
+
+export interface UserInfo {
+  user_id: string
+  email: string
+  display_name: string
+  role: string
+  auth_mode: string
+  is_active: boolean
+  created_at: string
+  last_seen_at?: string
+}
+
+export interface RepoAdminInfo {
+  repo_id: string
+  graph_nodes: number
+  graph_relationships: number
+  vector_chunks: number
+  files: number
+  commit_sha: string | null
+}
+
+export interface TableStat {
+  table_name: string
+  row_count: number
+  size_bytes: number | null
+}
+
+export interface QdrantStat {
+  collection_name: string
+  vectors_count: number
+  points_count: number
+  segments_count: number
+  status: string
+}
+
+export interface SystemStatsResponse {
+  qdrant: QdrantStat[]
+  postgres: TableStat[]
+}
+
+export interface PurgeResult {
+  sessions_purged: number
+  doc_rows_purged: number
+  test_rows_purged: number
+  security_rows_purged: number
+  auth_sessions_purged: number
+}
+
+export interface RepoMemberInfo {
+  user_id: string
+  email: string
+  display_name: string
+  role: string
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +255,7 @@ export interface DeleteRepoResponse {
 // Documentation generation
 // ---------------------------------------------------------------------------
 
-export type DocScope    = 'architecture' | 'per_module' | 'per_file' | 'subsystem' | 'flows'
+export type DocScope    = 'architecture' | 'per_module' | 'per_file' | 'subsystem' | 'flows' | 'user_guide' | 'developer_guide'
 export type DocStyle    = 'technical' | 'functional'
 export type DocLanguage = 'en' | 'fr' | 'es' | 'de' | 'zh' | 'ja' | 'pt' | 'ar'
 
@@ -322,6 +451,10 @@ export const api = {
   listRepos:   () => request<RepoListResponse>('/repos'),
   getRepoStats: (repoId: string) =>
     request<RepoStatsResponse>(`/repos/${encodeURIComponent(repoId)}/stats`),
+  getRepoSource: (repoId: string) =>
+    request<{ path: string; source_type: string; has_token: boolean }>(
+      `/repos/${encodeURIComponent(repoId)}/source`,
+    ),
   deleteRepo: (repoId: string, opts?: { deleteSessions?: boolean; deleteDocs?: boolean }) => {
     const params = new URLSearchParams()
     if (opts?.deleteSessions) params.set('delete_sessions', 'true')
@@ -340,22 +473,13 @@ export const api = {
       body: JSON.stringify(opts),
     }),
   uploadZip: async (repoId: string, file: File): Promise<IngestResponse> => {
-    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
-    const key = import.meta.env.VITE_API_KEY as string | undefined
     const form = new FormData()
     form.append('repo_id', repoId)
     form.append('file', file)
-    const headers: Record<string, string> = {}
-    if (key) headers['X-API-Key'] = key
-    const res = await fetch(`${base}/repos/upload`, {
-      method: 'POST',
-      headers,
-      body: form,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText)
-      throw new Error(text)
-    }
+    const headers = authHeaders()
+    delete headers['Content-Type'] // let browser set multipart boundary
+    const res = await fetch(`${BASE}/repos/upload`, { method: 'POST', headers, body: form })
+    if (!res.ok) { const text = await res.text().catch(() => res.statusText); throw new Error(text) }
     return res.json() as Promise<IngestResponse>
   },
   getRepoStatus: (repoId: string) =>
@@ -392,6 +516,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ title }),
     }),
+  getSessionMessages: (repoId: string, sessionId: string) =>
+    request<{ role: 'user' | 'assistant'; content: string }[]>(
+      `/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(sessionId)}/messages`,
+    ),
+
   deleteSession: (repoId: string, sessionId: string) =>
     request<{ session_id: string; deleted: boolean }>(
       `/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(sessionId)}`,
@@ -404,6 +533,11 @@ export const api = {
     ),
 
   // Files
+  listFiles: (repoId: string) =>
+    request<{ repo_id: string; files: string[]; total: number }>(
+      `/repos/${encodeURIComponent(repoId)}/files`,
+    ),
+
   getFileChunks: (repoId: string, filePath: string) =>
     request<FileChunksResponse>(
       `/repos/${encodeURIComponent(repoId)}/files/${filePath
@@ -478,18 +612,79 @@ export const api = {
       { method: 'DELETE' },
     ),
   downloadDocPdf: async (repoId: string, jobId: string): Promise<Blob> => {
-    const base = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
-    const key = import.meta.env.VITE_API_KEY as string | undefined
-    const headers: Record<string, string> = {}
-    if (key) headers['X-API-Key'] = key
+    const headers = authHeaders()
+    delete headers['Content-Type']
     const res = await fetch(
-      `${base}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-pdf`,
+      `${BASE}/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(jobId)}/download-pdf`,
       { headers },
     )
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText)
-      throw new Error(text)
-    }
+    if (!res.ok) { const text = await res.text().catch(() => res.statusText); throw new Error(text) }
     return res.blob()
   },
+
+  // Auth
+  authCheck: async (): Promise<{ status: 200 | 401 | 501; user?: AuthUser }> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = useAppStore.getState().authToken
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${BASE}/auth/me`, { headers })
+    if (res.status === 200) return { status: 200, user: await res.json() as AuthUser }
+    if (res.status === 501) return { status: 501 }
+    return { status: 401 }
+  },
+
+  login: (username: string, password: string, mode: 'key' | 'ldap' = 'key') =>
+    request<TokenResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, mode }),
+    }),
+
+  activate: (seat_key: string, email: string, display_name: string, password: string) =>
+    request<TokenResponse>('/auth/activate', {
+      method: 'POST',
+      body: JSON.stringify({ seat_key, email, display_name, password }),
+    }),
+
+  logout: (refresh_token: string) =>
+    request<void>('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token }),
+    }),
+
+  adminGetLicense: () => request<LicenseStatus>('/admin/license'),
+
+  // Admin — users
+  adminListUsers: () => request<UserInfo[]>('/admin/users'),
+  adminGetUser: (userId: string) => request<UserInfo>(`/admin/users/${encodeURIComponent(userId)}`),
+  adminUpdateUser: (userId: string, body: { is_active?: boolean; role?: string; display_name?: string }) =>
+    request<UserInfo>(`/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  adminDeleteUser: (userId: string) =>
+    request<void>(`/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+
+  // Admin — repos
+  adminListRepos: () => request<RepoAdminInfo[]>('/admin/repos'),
+  adminDeleteRepo: (repoId: string) =>
+    request<{ repo_id: string; graph_nodes_deleted: number; vector_chunks_deleted: number; sessions_deleted: number; docs_deleted: number }>(
+      `/repos/${encodeURIComponent(repoId)}?delete_sessions=true&delete_docs=true`,
+      { method: 'DELETE' },
+    ),
+
+  // Admin — repo members
+  adminListRepoMembers: (repoId: string) =>
+    request<RepoMemberInfo[]>(`/repos/${encodeURIComponent(repoId)}/members`),
+  adminAddRepoMember: (repoId: string, email: string, role: string) =>
+    request<RepoMemberInfo>(`/repos/${encodeURIComponent(repoId)}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+  adminRemoveRepoMember: (repoId: string, userId: string) =>
+    request<void>(`/repos/${encodeURIComponent(repoId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+
+  // Admin — system stats + maintenance
+  adminSystemStats: () => request<SystemStatsResponse>('/admin/system/stats'),
+  adminPurge: () => request<PurgeResult>('/admin/maintenance/purge', { method: 'POST' }),
 }
+

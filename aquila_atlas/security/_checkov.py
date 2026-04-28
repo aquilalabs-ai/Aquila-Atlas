@@ -10,6 +10,7 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 
 from ._findings import Finding, infer_owasp, tool_severity
 
@@ -42,6 +43,21 @@ def is_checkov_available() -> bool:
     return shutil.which("checkov") is not None
 
 
+def _checkov_cmd(path: str) -> tuple[list[str], bool]:
+    """Return (command, shell) for running checkov on Windows and Unix.
+
+    On Windows, pip installs checkov as a .cmd wrapper that subprocess cannot
+    execute directly — it requires shell=True or using the Python interpreter.
+    We prefer sys.executable -m checkov which is portable across all platforms.
+    """
+    args = ["--directory", path, "--output", "json", "--quiet", "--compact"]
+    resolved = shutil.which("checkov")
+    if resolved and resolved.lower().endswith((".cmd", ".bat")):
+        # Windows .cmd wrapper — run through the Python interpreter instead
+        return [sys.executable, "-m", "checkov"] + args, False
+    return ["checkov"] + args, False
+
+
 def run_checkov(path: str) -> list[Finding]:
     """Run checkov against *path* and return parsed findings.
 
@@ -51,21 +67,14 @@ def run_checkov(path: str) -> list[Finding]:
         logger.warning("checkov not found — skipping IaC scan (pip install checkov to enable)")
         return []
 
-    cmd = [
-        "checkov",
-        "--directory",
-        path,
-        "--output",
-        "json",
-        "--quiet",
-        "--compact",
-    ]
+    cmd, use_shell = _checkov_cmd(path)
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=_CHECKOV_TIMEOUT,
+            shell=use_shell,
         )
     except subprocess.TimeoutExpired:
         logger.warning("checkov timed out after %ds", _CHECKOV_TIMEOUT)

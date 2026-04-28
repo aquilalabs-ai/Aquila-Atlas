@@ -31,6 +31,10 @@ dependencies = [
     "tree-sitter-language-pack>=0.7",
     "semgrep>=1.161.0",
     "checkov>=3.2",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "ldap3>=2.9",
+    "streamlit>=1.56.0",
 ]
 
 [project.scripts]

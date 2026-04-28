@@ -1074,6 +1074,8 @@ const SCOPE_OPTIONS: { value: DocScope; label: string; description: string }[] =
   { value: 'per_file', label: 'Per file', description: 'One file per source file with signatures and side-effects' },
   { value: 'subsystem', label: 'Subsystems', description: "One file per import-graph community — explains each cluster's collective purpose" },
   { value: 'flows', label: 'Execution flows', description: 'One file per entry point — traces the full call chain from public functions' },
+  { value: 'user_guide', label: 'User guide', description: 'Single document — installation, configuration, features, workflows, and troubleshooting for end users' },
+  { value: 'developer_guide', label: 'Developer guide', description: 'Single document — dev setup, architecture, extension guide, testing, and code conventions for contributors' },
 ]
 
 const STYLE_OPTIONS: { value: DocStyle; label: string }[] = [

@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
+from aquila_atlas.api.deps import Auth, CurrentUser, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
     FindingSummary,
     SecurityDeleteResponse,
@@ -43,6 +43,10 @@ ScanStatusLiteral = Literal["queued", "running", "done", "failed"]
 # ---------------------------------------------------------------------------
 
 
+def _uid(user: dict | None) -> str:  # type: ignore[type-arg]
+    return user["id"] if user is not None else ""
+
+
 @dataclass
 class SecurityJobRecord:
     job_id: str
@@ -63,6 +67,7 @@ class SecurityJobRecord:
     branch: str = ""
     semgrep_config: str = "auto"
     run_llm_triage: bool = True
+    user_id: str = ""
 
 
 _security_jobs: dict[str, SecurityJobRecord] = {}
@@ -123,6 +128,7 @@ def _persist_scan(record: SecurityJobRecord, security_store: object) -> None:
             report=record.report,
             severity_counts=record.severity_counts,
             tools_used=record.tools_used,
+            user_id=record.user_id,
         )
 
 
@@ -187,6 +193,7 @@ async def submit_security_scan(
     request: Request,
     svc: Svc,
     _auth: Auth,
+    user: CurrentUser,
 ) -> SecurityScanResponse:
     job_id = str(uuid.uuid4())
     record = SecurityJobRecord(
@@ -197,6 +204,7 @@ async def submit_security_scan(
         branch=body.branch,
         semgrep_config=body.semgrep_config,
         run_llm_triage=body.run_llm_triage,
+        user_id=_uid(user),
     )
     _security_jobs[job_id] = record
     security_store = getattr(request.app.state, "security_store", None)
@@ -239,6 +247,7 @@ async def list_security_scans(
     repo_id: str,
     request: Request,
     _auth: Auth,
+    user: CurrentUser,
 ) -> SecurityScanListResponse:
     security_store = getattr(request.app.state, "security_store", None)
     if security_store is None:
@@ -247,7 +256,8 @@ async def list_security_scans(
 
     if not isinstance(security_store, SecurityStore):
         return SecurityScanListResponse(repo_id=repo_id, scans=[], total=0)
-    rows = security_store.list_repo_scans(repo_id)
+    uid = _uid(user)
+    rows = security_store.list_repo_scans(repo_id, user_id=uid)
     scans = [SecurityScanMeta(**row) for row in rows]
     return SecurityScanListResponse(repo_id=repo_id, scans=scans, total=len(scans))
 

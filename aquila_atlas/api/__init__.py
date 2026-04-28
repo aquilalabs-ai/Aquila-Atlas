@@ -34,10 +34,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+from datetime import UTC
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
+from aquila_atlas.api.routers import (
+    admin as admin_router,
+)
+from aquila_atlas.api.routers import (
+    auth as auth_router,
+)
 from aquila_atlas.api.routers import (
     chat,
     docs,
@@ -133,6 +141,50 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             exc_info=True,
         )
         app.state.security_store = None
+
+    # Auth store — users, sessions, and instance license
+    from aquila_atlas.api.auth.store import AuthStore  # noqa: PLC0415
+
+    try:
+        app.state.auth_store = AuthStore(get_settings().postgres_url)
+        _log.info("Auth store connected to PostgreSQL")
+
+        # Validate and cache instance license if auth is enabled and a key is configured
+        license_key = get_settings().aquila_license_key
+        if license_key and get_settings().auth_mode != "disabled":
+            from aquila_atlas.api.auth.license import (  # noqa: PLC0415
+                LicenseError,
+                validate_instance_license,
+            )
+
+            try:
+                payload = validate_instance_license(
+                    license_key, get_settings().aquila_vendor_public_key
+                )
+                from datetime import datetime  # noqa: PLC0415
+
+                app.state.auth_store.save_license(
+                    customer_id=payload["customer_id"],
+                    customer_name=payload["customer_name"],
+                    max_seats=int(payload["max_seats"]),
+                    expires_at=datetime.fromtimestamp(payload["exp"], tz=UTC),
+                    raw_token=license_key,
+                )
+                _log.info(
+                    "Instance license validated: %s (%d seats)",
+                    payload["customer_name"],
+                    payload["max_seats"],
+                )
+            except LicenseError as exc:
+                _log.error("INVALID INSTANCE LICENSE: %s — app will refuse logins", exc)
+        elif get_settings().auth_mode != "disabled":
+            _log.warning(
+                "AUTH_MODE=%s but no AQUILA_LICENSE_KEY set — logins will be rejected",
+                get_settings().auth_mode,
+            )
+    except Exception:
+        _log.warning("PostgreSQL unavailable — auth store not initialized", exc_info=True)
+        app.state.auth_store = None
 
     # Load MCP tools once at startup so every chat session gets them
     try:
@@ -230,6 +282,20 @@ _TAG_METADATA = [
             "detection). Findings classified as critical / major / minor per OWASP Top 10."
         ),
     },
+    {
+        "name": "Auth",
+        "description": (
+            "Authentication: seat key activation, login (key / LDAP), token refresh, logout. "
+            "All endpoints return HTTP 501 when AUTH_MODE=disabled (default)."
+        ),
+    },
+    {
+        "name": "Admin",
+        "description": (
+            "Admin-only endpoints: instance license status, user management (list, get, "
+            "update, delete), and repository membership management."
+        ),
+    },
 ]
 
 
@@ -319,6 +385,8 @@ def create_app() -> FastAPI:
     application.include_router(docs.router)
     application.include_router(testing.router)
     application.include_router(security.router)
+    application.include_router(auth_router.router)
+    application.include_router(admin_router.router)
 
     return application
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
+import { useState, useEffect, useRef, useId, useMemo, memo, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -11,10 +11,116 @@ import type { Message } from '@/hooks/useChat'
 import type { Components } from 'react-markdown'
 
 // ---------------------------------------------------------------------------
-// Citation badge — inline code that matches "path/to/file.ext:123"
+// Citation badge — inline code that matches "path/to/file.ext" or "…:123" or "…:123-456"
+// Also used by the anchor renderer for local markdown links.
 // ---------------------------------------------------------------------------
 
-const CITATION_RE = /^([\w./-]+\.[a-zA-Z]+):(\d+)(?:-(\d+))?$/
+// Line numbers are optional; accept both regular hyphen and non-breaking hyphen (U+2011)
+const CITATION_RE = /^([\w./-]+\.[a-zA-Z0-9]+)(?::(\d+)(?:[-‑](\d+))?)?$/
+
+// GitHub-style anchor: path/to/file.py#L42  or  path/to/file.py#L42-L50
+const GITHUB_ANCHOR_RE = /^(.+?)#L(\d+)(?:-L(\d+))?$/
+
+/** Resolve a (possibly partial) file path against the known file list for the repo.
+ *  `found` is false only when the index is loaded AND no match exists at all. */
+function resolveFilePath(
+  partial: string,
+  files: string[],
+  indexLoaded: boolean,
+): { resolved: string; candidates: string[]; found: boolean } {
+  // Index not yet loaded — optimistically treat as found so the badge shows
+  if (!indexLoaded) return { resolved: partial, candidates: [], found: true }
+  // Exact match
+  if (files.includes(partial)) return { resolved: partial, candidates: [], found: true }
+  // Suffix match: find all files whose path ends with /partial
+  const needle  = partial.startsWith('/') ? partial : `/${partial}`
+  const matches = files.filter((f) => f === partial || f.endsWith(needle))
+  if (matches.length === 1) return { resolved: matches[0], candidates: [],       found: true }
+  if (matches.length > 1)   return { resolved: partial,   candidates: matches,   found: true }
+  // Nothing found in a loaded index
+  return { resolved: partial, candidates: [], found: false }
+}
+
+function FileBadge({
+  repoId,
+  filePath,
+  line,
+  endLine,
+  label,
+}: {
+  repoId:    string
+  filePath:  string
+  line?:     number
+  endLine?:  number
+  label?:    string
+}) {
+  const openSource      = useAppStore((s) => s.openSource)
+  const fileIndex       = useAppStore((s) => s.fileIndex)
+  const loadFileIndex   = useAppStore((s) => s.loadFileIndex)
+  const [open, setOpen] = useState(false)
+  const ref             = useRef<HTMLDivElement>(null)
+
+  // Load the index once per repo
+  useEffect(() => { void loadFileIndex(repoId) }, [repoId, loadFileIndex])
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const files       = fileIndex[repoId] ?? []
+  const indexLoaded = repoId in fileIndex
+  const { resolved, candidates, found } = resolveFilePath(filePath, files, indexLoaded)
+  const display = label ?? (line !== undefined ? `${filePath}:${line}${endLine !== undefined ? `-${endLine}` : ''}` : filePath)
+
+  // Index loaded and no match — render as plain inline code
+  if (!found) {
+    return (
+      <code className="rounded border border-border-muted bg-canvas-subtle px-1.5 py-0.5 font-mono text-xs text-fg-default">
+        {display}
+      </code>
+    )
+  }
+
+  const handleClick = useCallback(() => {
+    if (candidates.length > 0) { setOpen((v) => !v); return }
+    openSource({ repoId, filePath: resolved, line, endLine })
+  }, [candidates.length, openSource, repoId, resolved, line, endLine])
+
+  return (
+    <span ref={ref} className="relative inline-flex">
+      <button
+        onClick={handleClick}
+        title={candidates.length > 0 ? `Ambiguous path — click to pick` : `Open ${resolved}`}
+        className="inline-flex cursor-pointer items-center gap-1 rounded border border-accent-fg/30 bg-accent-subtle px-1.5 py-0.5 font-mono text-xs text-accent-fg transition-colors hover:bg-accent-muted"
+      >
+        <FileCode2 className="h-3 w-3 flex-shrink-0" />
+        {display}
+        {candidates.length > 0 && <span className="ml-0.5 opacity-60">▾</span>}
+      </button>
+
+      {open && candidates.length > 0 && (
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-max rounded border border-border-default bg-canvas-overlay shadow-lg">
+          {candidates.map((c) => (
+            <button
+              key={c}
+              onClick={() => { openSource({ repoId, filePath: c, line, endLine }); setOpen(false) }}
+              className="flex w-full items-center gap-1.5 px-3 py-1.5 font-mono text-xs text-fg-default hover:bg-canvas-subtle"
+            >
+              <FileCode2 className="h-3 w-3 flex-shrink-0 text-accent-fg" />
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  )
+}
 
 function CitationBadge({
   children,
@@ -23,8 +129,7 @@ function CitationBadge({
   children: string
   repoId:   string
 }) {
-  const openSource = useAppStore((s) => s.openSource)
-  const match      = CITATION_RE.exec(children)
+  const match = CITATION_RE.exec(children)
 
   if (!match) {
     return (
@@ -36,19 +141,12 @@ function CitationBadge({
 
   const [, filePath, lineStr, endLineStr] = match
   return (
-    <button
-      onClick={() => openSource({
-        repoId,
-        filePath,
-        line:    parseInt(lineStr),
-        endLine: endLineStr ? parseInt(endLineStr) : undefined,
-      })}
-      title={`Open ${filePath}:${lineStr}${endLineStr ? `-${endLineStr}` : ''}`}
-      className="inline-flex cursor-pointer items-center gap-1 rounded border border-accent-fg/30 bg-accent-subtle px-1.5 py-0.5 font-mono text-xs text-accent-fg transition-colors hover:bg-accent-muted"
-    >
-      <FileCode2 className="h-3 w-3 flex-shrink-0" />
-      {children}
-    </button>
+    <FileBadge
+      repoId={repoId}
+      filePath={filePath}
+      line={lineStr ? parseInt(lineStr) : undefined}
+      endLine={endLineStr ? parseInt(endLineStr) : undefined}
+    />
   )
 }
 
@@ -79,6 +177,15 @@ export function MermaidBlock({
   useEffect(() => {
     let cancelled = false
     async function render() {
+      // Don't attempt to render while message is still streaming — check this
+      // FIRST so a partial/unclosed fence that remark parsed as a code block
+      // never reaches mermaid.render() with incomplete content.
+      if (isStreaming) {
+        setPending('Mermaid diagram is being streamed; waiting for completion...')
+        setFallback(null)
+        return
+      }
+
       if (!chart.trim()) {
         if (!cancelled && containerRef.current) containerRef.current.innerHTML = ''
         setPending(null)
@@ -86,9 +193,14 @@ export function MermaidBlock({
         return
       }
 
-      // Don't attempt to render while message is still streaming
-      if (isStreaming) {
-        setPending('Mermaid diagram is being streamed; waiting for completion...')
+      // Reject content that doesn't start with a recognised diagram-type keyword.
+      // This catches the case where remark-gfm produces a code node from an
+      // unclosed fence whose body is still partial/invalid mid-stream.
+      const DIAGRAM_KEYWORD = /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitGraph|xychart|mindmap|quadrantChart|timeline|journey|block|sankey|packet|architecture|zenuml|kanban)\b/i
+      if (!DIAGRAM_KEYWORD.test(chart.trim())) {
+        if (!silent) {
+          setPending('Waiting for diagram content...')
+        }
         setFallback(null)
         return
       }
@@ -343,6 +455,38 @@ export const MessageBubble = memo(function MessageBubble({ message, repoId, isLa
       )
     },
     a({ href, children }) {
+      if (href) {
+        // GitHub-style anchor: path/to/file.py#L42  or  #L42-L50
+        const anchorMatch = GITHUB_ANCHOR_RE.exec(href)
+        if (anchorMatch) {
+          const [, filePath, lineStr, endLineStr] = anchorMatch
+          return (
+            <FileBadge
+              repoId={repoId}
+              filePath={filePath}
+              line={parseInt(lineStr)}
+              endLine={endLineStr ? parseInt(endLineStr) : undefined}
+              label={typeof children === 'string' ? children : undefined}
+            />
+          )
+        }
+        // Bare local path (no protocol) that looks like a source file
+        if (!href.startsWith('http') && !href.startsWith('//') && !href.startsWith('mailto:')) {
+          const fileMatch = CITATION_RE.exec(href)
+          if (fileMatch) {
+            const [, filePath, lineStr, endLineStr] = fileMatch
+            return (
+              <FileBadge
+                repoId={repoId}
+                filePath={filePath}
+                line={lineStr ? parseInt(lineStr) : undefined}
+                endLine={endLineStr ? parseInt(endLineStr) : undefined}
+                label={typeof children === 'string' ? children : undefined}
+              />
+            )
+          }
+        }
+      }
       return (
         <a
           href={href}

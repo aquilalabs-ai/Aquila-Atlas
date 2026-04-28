@@ -220,3 +220,14 @@ frontend/dist/
 frontend/.vite/
 frontend/.cache/
 GUIDE.md
+AUTH.md
+
+scripts/vendor_private_key.pem
+scripts/vendor_public_key.pem
+scripts/generate_keypair.py
+scripts/issue_license.py
+scripts/issue_seat_keys.py
+scripts/make_admin.py
+scripts/vendor_dashboard.py
+scripts/clients.json
+seat_keys.txt

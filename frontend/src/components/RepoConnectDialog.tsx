@@ -266,6 +266,25 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
         })
       }
 
+      if (res.status === 'already_exists') {
+        // Repo is already indexed — user has been granted access, no re-ingestion needed.
+        qc.invalidateQueries({ queryKey: ['repos'] })
+        setActiveRepoId(res.repo_id)
+        // Persist source so panels like SecurityPanel can pre-fill the target.
+        if (tab === 'local') {
+          setRepoSource(res.repo_id, { path: localFolderName, source_type: 'local' })
+        } else if (tab === 'remote') {
+          setRepoSource(res.repo_id, {
+            path:         remoteUrl.trim(),
+            source_type:  remoteProvider,
+            github_token: remoteToken.trim() || undefined,
+          })
+        }
+        toast.success(`"${res.repo_id}" imported — you now have access.`)
+        dismiss()
+        return
+      }
+
       setJobId(res.job_id)
       setStep('ingesting')
     } catch (err) {

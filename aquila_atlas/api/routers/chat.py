@@ -11,12 +11,14 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from aquila_atlas.api.deps import Auth, SessionMeta, Sessions, Store, Svc  # noqa: TC001
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Coroutine
-
-    from langchain_core.tools import BaseTool
+from aquila_atlas.api.deps import (  # noqa: TC001
+    Auth,
+    CurrentUser,
+    SessionMeta,
+    Sessions,
+    Store,
+    Svc,
+)
 from aquila_atlas.api.models import (
     ChatRequest,
     ChatResponse,
@@ -31,6 +33,10 @@ from aquila_atlas.api.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Coroutine
+
+    from langchain_core.tools import BaseTool
+
     from aquila_atlas.knowledge.service import KnowledgeService
     from aquila_atlas.reasoning.agent import CodebaseAgent
 
@@ -46,10 +52,15 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _make_meta(session_id: str, repo_id: str, title: str) -> dict:  # type: ignore[type-arg]
+def _uid(user: dict | None) -> str:  # type: ignore[type-arg]
+    return user["id"] if user is not None else ""
+
+
+def _make_meta(session_id: str, repo_id: str, title: str, user_id: str = "") -> dict:  # type: ignore[type-arg]
     return {
         "session_id": session_id,
         "repo_id": repo_id,
+        "user_id": user_id,
         "title": title,
         "created_at": _now_iso(),
         "message_count": 0,
@@ -65,6 +76,7 @@ def _create_session(
     title: str = "New Chat",
     extra_tools: list[BaseTool] | None = None,
     security_store: object | None = None,
+    user_id: str = "",
 ) -> CodebaseAgent:
     from aquila_atlas.reasoning.agent import CodebaseAgent as _Agent  # noqa: PLC0415
 
@@ -72,7 +84,7 @@ def _create_session(
         service=svc, repo_id=repo_id, extra_tools=extra_tools, security_store=security_store
     )
     sessions[session_id] = agent
-    session_meta[session_id] = _make_meta(session_id, repo_id, title)
+    session_meta[session_id] = _make_meta(session_id, repo_id, title, user_id=user_id)
     return agent
 
 
@@ -144,6 +156,7 @@ async def create_session(
     session_meta: SessionMeta,
     store: Store,
     _auth: Auth,
+    user: CurrentUser,
 ) -> SessionCreateResponse:
     if repo_id not in svc.list_repo_ids():
         raise HTTPException(
@@ -151,6 +164,7 @@ async def create_session(
             detail=f"Repo '{repo_id}' not found",
         )
     session_id = str(uuid.uuid4())
+    uid = _uid(user)
     _create_session(
         sessions,
         session_meta,
@@ -160,6 +174,7 @@ async def create_session(
         title=req.title,
         extra_tools=getattr(request.app.state, "mcp_tools", None) or None,
         security_store=getattr(request.app.state, "security_store", None),
+        user_id=uid,
     )
     meta = session_meta[session_id]
     if store is not None:
@@ -220,6 +235,7 @@ async def chat(
     session_meta: SessionMeta,
     store: Store,
     _auth: Auth,
+    user: CurrentUser,
 ) -> StreamingResponse | ChatResponse:
     if repo_id not in svc.list_repo_ids():
         raise HTTPException(
@@ -227,6 +243,7 @@ async def chat(
             detail=f"Repo '{repo_id}' not found",
         )
     session_id = req.session_id or str(uuid.uuid4())
+    uid = _uid(user)
     agent = _get_or_create_agent(
         sessions,
         session_meta,
@@ -238,6 +255,10 @@ async def chat(
         security_store=getattr(request.app.state, "security_store", None),
     )
     meta = session_meta[session_id]
+
+    # Stamp user_id if this session was created on-the-fly (not via create_session)
+    if not meta.get("user_id") and uid:
+        meta["user_id"] = uid
 
     # Set title from the first user message
     if meta["message_count"] == 0:
@@ -339,15 +360,22 @@ def list_sessions(
     session_meta: SessionMeta,
     store: Store,
     _auth: Auth,
+    user: CurrentUser,
 ) -> SessionListResponse:
+    uid = _uid(user)
     # Merge Valkey (all-time) with in-memory (current run) — Valkey wins on conflict
     merged: dict[str, dict] = {  # type: ignore[type-arg]
-        m["session_id"]: m for m in session_meta.values() if m.get("repo_id") == repo_id
+        m["session_id"]: m
+        for m in session_meta.values()
+        if m.get("repo_id") == repo_id and (not uid or m.get("user_id", "") == uid)
     }
     if store is not None:
-        for m in store.list_repo_sessions(repo_id):
+        for m in store.list_repo_sessions(repo_id, user_id=uid):
             merged[m["session_id"]] = m  # Valkey copy is authoritative
-    matching = [SessionInfo(**m) for m in merged.values()]
+    _si_fields = SessionInfo.model_fields
+    matching = [
+        SessionInfo(**{k: v for k, v in m.items() if k in _si_fields}) for m in merged.values()
+    ]
     matching.sort(key=lambda s: s.created_at, reverse=True)
     return SessionListResponse(repo_id=repo_id, sessions=matching, total=len(matching))
 
@@ -383,6 +411,40 @@ def get_session_store_info(
         total_sessions=store.count_sessions(),
         sessions_by_repo=store.list_repo_session_counts(),
     )
+
+
+@router.get(
+    "/{repo_id}/sessions/{session_id}/messages",
+    summary="Get persisted message history for a session",
+    responses={401: {"model": ErrorResponse, "description": "Invalid or missing API key"}},
+)
+def get_session_messages(
+    repo_id: str,
+    session_id: str,
+    sessions: Sessions,
+    store: Store,
+    _auth: Auth,
+) -> list[dict[str, str]]:
+    """Return the conversation history as a flat list of {role, content} dicts.
+
+    Checks the in-memory agent first (current server run), then falls back to
+    the PostgreSQL store (survives server restarts).  Returns an empty list when
+    no history is found rather than 404, so the frontend can distinguish
+    'session exists but empty' from 'session not found'.
+    """
+    history: list[Any] = []
+    if session_id in sessions:
+        history = sessions[session_id].get_history()
+    elif store is not None:
+        history = store.load_history(session_id)
+
+    result: list[dict[str, str]] = []
+    for msg in history:
+        cls = type(msg).__name__
+        role = "user" if cls == "HumanMessage" else "assistant"
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        result.append({"role": role, "content": content})
+    return result
 
 
 @router.post(

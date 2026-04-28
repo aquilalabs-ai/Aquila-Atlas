@@ -24,9 +24,23 @@ class ReadinessResponse(BaseModel):
     status: str  # "ready" | "degraded"
     neo4j: bool
     qdrant: bool
+    license_valid: bool | None = None
+    seats_used: int | None = None
+    seats_total: int | None = None
 
     model_config = {
-        "json_schema_extra": {"examples": [{"status": "ready", "neo4j": True, "qdrant": True}]}
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "status": "ready",
+                    "neo4j": True,
+                    "qdrant": True,
+                    "license_valid": True,
+                    "seats_used": 3,
+                    "seats_total": 25,
+                }
+            ]
+        }
     }
 
 
@@ -47,6 +61,24 @@ class RepoListResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {"examples": [{"repos": ["my-service", "frontend-app"], "total": 2}]}
+    }
+
+
+class RepoSourceResponse(BaseModel):
+    path: str
+    source_type: str
+    has_token: bool = Field(False, description="True if a token was used during ingestion")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "path": "https://github.com/owner/repo",
+                    "source_type": "github",
+                    "has_token": True,
+                }
+            ]
+        }
     }
 
 
@@ -679,7 +711,7 @@ class DocGenRequest(BaseModel):
         "architecture",
         description=(
             "Documentation scope: "
-            '"architecture" | "per_module" | "per_file" | "subsystem" | "flows"'
+            '"architecture" | "per_module" | "per_file" | "subsystem" | "flows" | "user_guide" | "developer_guide"'
         ),
     )
     style: str = Field("technical", description='"technical" (developer) or "functional" (PM/QA)')
@@ -1226,6 +1258,177 @@ class SecurityDeleteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Auth / Identity
+# ---------------------------------------------------------------------------
+
+
+class ActivateRequest(BaseModel):
+    """Seat-key activation request (``key`` auth mode only)."""
+
+    seat_key: str = Field(..., description="Vendor-issued RS256-signed seat key JWT")
+    email: str = Field(
+        ..., description="User e-mail address (must match key if key contains email)"
+    )
+    display_name: str = Field("", description="Optional display name")
+    password: str = Field(..., min_length=8, description="Chosen password (min 8 characters)")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "seat_key": "<vendor-signed JWT>",
+                    "email": "alice@acme.com",
+                    "display_name": "Alice Smith",
+                    "password": "S3cur3P@ss!",
+                }
+            ]
+        }
+    }
+
+
+class LoginRequest(BaseModel):
+    """Login with email + password (key mode) or AD username + password (ldap mode)."""
+
+    username: str = Field(..., description="E-mail for key mode; AD username for ldap mode")
+    password: str
+    mode: str = Field("key", description='"key" | "ldap"')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"username": "alice@acme.com", "password": "S3cur3P@ss!", "mode": "key"},
+                {"username": "ACME\\alice", "password": "ADpassword", "mode": "ldap"},
+            ]
+        }
+    }
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user_id: str
+    email: str
+    role: str = Field(..., description='"admin" | "user"')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "access_token": "<JWT>",
+                    "refresh_token": "<JWT>",
+                    "token_type": "bearer",
+                    "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "email": "alice@acme.com",
+                    "role": "user",
+                }
+            ]
+        }
+    }
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+    model_config = {"json_schema_extra": {"examples": [{"refresh_token": "<refresh JWT>"}]}}
+
+
+class UserInfo(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    role: str
+    auth_mode: str
+    is_active: bool
+    created_at: str
+    last_seen_at: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "email": "alice@acme.com",
+                    "display_name": "Alice Smith",
+                    "role": "user",
+                    "auth_mode": "key",
+                    "is_active": True,
+                    "created_at": "2026-04-26T10:00:00+00:00",
+                    "last_seen_at": "2026-04-26T12:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class UserUpdateRequest(BaseModel):
+    is_active: bool | None = None
+    role: str | None = None
+    display_name: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{"is_active": False}, {"role": "admin"}, {"display_name": "Bob Jones"}]
+        }
+    }
+
+
+class LicenseStatus(BaseModel):
+    valid: bool
+    customer_id: str = ""
+    customer_name: str = ""
+    max_seats: int = 0
+    seats_used: int = 0
+    seats_available: int = 0
+    expires_at: str = ""
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "valid": True,
+                    "customer_id": "acme-corp",
+                    "customer_name": "ACME Corporation",
+                    "max_seats": 25,
+                    "seats_used": 3,
+                    "seats_available": 22,
+                    "expires_at": "2027-04-26T00:00:00+00:00",
+                }
+            ]
+        }
+    }
+
+
+class RepoMemberInfo(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    role: str = Field(..., description='"owner" | "member" | "viewer"')
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "email": "alice@acme.com",
+                    "display_name": "Alice Smith",
+                    "role": "owner",
+                }
+            ]
+        }
+    }
+
+
+class AddRepoMemberRequest(BaseModel):
+    email: str
+    role: str = Field("member", description='"owner" | "member" | "viewer"')
+
+    model_config = {
+        "json_schema_extra": {"examples": [{"email": "bob@acme.com", "role": "member"}]}
+    }
+
+
+# ---------------------------------------------------------------------------
 # Errors  (used via HTTPException — documented here for Swagger)
 # ---------------------------------------------------------------------------
 
@@ -1234,3 +1437,46 @@ class ErrorResponse(BaseModel):
     detail: str
 
     model_config = {"json_schema_extra": {"examples": [{"detail": "Repo 'my-service' not found"}]}}
+
+
+# ---------------------------------------------------------------------------
+# Admin — repo + system stats
+# ---------------------------------------------------------------------------
+
+
+class RepoAdminInfo(BaseModel):
+    repo_id: str
+    graph_nodes: int
+    graph_relationships: int
+    vector_chunks: int
+    files: int
+    commit_sha: str | None = None
+
+
+class TableStat(BaseModel):
+    table_name: str
+    row_count: int
+    size_bytes: int | None = None
+
+
+class QdrantStat(BaseModel):
+    collection_name: str
+    vectors_count: int
+    points_count: int
+    segments_count: int
+    disk_data_size: int | None = None
+    ram_data_size: int | None = None
+    status: str
+
+
+class SystemStatsResponse(BaseModel):
+    qdrant: list[QdrantStat]
+    postgres: list[TableStat]
+
+
+class PurgeResult(BaseModel):
+    sessions_purged: int
+    doc_rows_purged: int
+    test_rows_purged: int
+    security_rows_purged: int
+    auth_sessions_purged: int

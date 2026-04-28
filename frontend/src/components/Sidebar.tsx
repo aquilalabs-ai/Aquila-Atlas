@@ -12,11 +12,15 @@ import {
   MessageSquare,
   PenLine,
   Loader2,
+  LogOut,
+  User,
+  Shield,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRepoList, useDeleteRepo, useResyncRepo } from '@/hooks/useRepos'
 import { useSessionList, useCreateSession, useDeleteSession } from '@/hooks/useSessions'
 import { useAppStore } from '@/store/app'
+import { api } from '@/lib/api'
 import { RepoConnectDialog } from './RepoConnectDialog'
 import { cn } from '@/lib/utils'
 import logo from '@/assets/images/aquila-text.svg'
@@ -311,17 +315,36 @@ function RepoItem({
 // Main sidebar
 // ---------------------------------------------------------------------------
 
-export function Sidebar() {
+export function Sidebar({ onAdminOpen }: { onAdminOpen?: () => void }) {
   const [connectOpen, setConnectOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const { data, isLoading, refetch } = useRepoList()
   const deleteRepo                   = useDeleteRepo()
 
-  const activeRepoId  = useAppStore((s) => s.activeRepoId)
-  const setActiveRepo = useAppStore((s) => s.setActiveRepoId)
-  const theme         = useAppStore((s) => s.theme)
-  const toggleTheme   = useAppStore((s) => s.toggleTheme)
+  const activeRepoId      = useAppStore((s) => s.activeRepoId)
+  const setActiveRepo     = useAppStore((s) => s.setActiveRepoId)
+
+  // If the persisted activeRepoId is not in the accessible repo list (e.g. after
+  // a user switch or membership change), clear it so we don't show inaccessible data.
+  useEffect(() => {
+    if (!isLoading && data && activeRepoId && !data.repos.includes(activeRepoId)) {
+      setActiveRepo(null)
+    }
+  }, [data, isLoading, activeRepoId, setActiveRepo])
+  const theme             = useAppStore((s) => s.theme)
+  const toggleTheme       = useAppStore((s) => s.toggleTheme)
+  const authUser          = useAppStore((s) => s.authUser)
+  const authDisabled      = useAppStore((s) => s.authDisabled)
+  const authRefreshToken  = useAppStore((s) => s.authRefreshToken)
+  const clearAuth         = useAppStore((s) => s.clearAuth)
+
+  async function handleLogout() {
+    try {
+      if (authRefreshToken) await api.logout(authRefreshToken)
+    } catch { /* best-effort */ }
+    clearAuth()
+  }
 
   const repos = data?.repos ?? []
 
@@ -417,6 +440,33 @@ export function Sidebar() {
           )}
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </button>
+
+        {!authDisabled && authUser && (
+          <div className="mt-1 border-t border-border-default pt-1.5">
+            {authUser.role === 'admin' && (
+              <button
+                onClick={onAdminOpen}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-fg-muted transition-colors hover:bg-canvas-subtle hover:text-fg-default"
+              >
+                <Shield className="h-3.5 w-3.5 text-accent-fg" />
+                Admin panel
+              </button>
+            )}
+            <div className="flex items-center gap-2 px-2 py-1">
+              <User className="h-3.5 w-3.5 flex-shrink-0 text-fg-subtle" />
+              <span className="flex-1 truncate text-xs text-fg-muted" title={authUser.email}>
+                {authUser.display_name || authUser.email}
+              </span>
+              <button
+                onClick={() => void handleLogout()}
+                title="Sign out"
+                className="rounded p-0.5 text-fg-subtle hover:bg-canvas-subtle hover:text-danger-fg"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <RepoConnectDialog open={connectOpen} onOpenChange={setConnectOpen} />

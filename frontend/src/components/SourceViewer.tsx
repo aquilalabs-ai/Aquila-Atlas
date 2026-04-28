@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import { X, FileCode2, AlertCircle } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
@@ -44,6 +44,8 @@ export function SourceViewer({ repoId, filePath, line, endLine }: Props) {
   const closeSource = useAppStore((s) => s.closeSource)
   const theme       = useAppStore((s) => s.theme)
   const editorRef   = useRef<Parameters<OnMount>[0] | null>(null)
+  const monacoRef   = useRef<Parameters<OnMount>[1] | null>(null)
+  const decorRef    = useRef<{ clear: () => void } | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['fileChunks', repoId, filePath],
@@ -69,24 +71,39 @@ export function SourceViewer({ repoId, filePath, line, endLine }: Props) {
   const ext      = filePath.split('.').pop()?.toLowerCase() ?? ''
   const language = EXT_LANG[ext] ?? 'plaintext'
 
+  const applyScroll = useCallback((targetLine: number, targetEndLine?: number) => {
+    const editor = editorRef.current
+    const monaco = monacoRef.current
+    if (!editor || !monaco) return
+    editor.revealLineInCenter(targetLine)
+    editor.setPosition({ lineNumber: targetLine, column: 1 })
+    const rangeEnd = targetEndLine ?? targetLine
+    decorRef.current?.clear()
+    decorRef.current = editor.createDecorationsCollection([{
+      range: new monaco.Range(targetLine, 1, rangeEnd, Number.MAX_SAFE_INTEGER),
+      options: {
+        isWholeLine: true,
+        className: 'monaco-cited-range',
+        overviewRuler: { color: 'rgba(56, 139, 253, 0.6)', position: monaco.editor.OverviewRulerLane.Full },
+      },
+    }])
+  }, [])
+
+  // Scroll whenever line/endLine changes and the editor is already mounted
+  useEffect(() => {
+    if (line && editorRef.current && monacoRef.current) {
+      applyScroll(line, endLine)
+    }
+  }, [line, endLine, applyScroll])
+
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor
+    monacoRef.current = monaco
     if (line) {
+      // Wait for first layout before scrolling so the editor has a measured height
       const disposable = editor.onDidLayoutChange(() => {
         disposable.dispose()
-        editor.revealLineInCenter(line)
-        editor.setPosition({ lineNumber: line, column: 1 })
-
-        // Highlight the cited range if we have one, otherwise just the single line
-        const rangeEnd = endLine ?? line
-        editor.createDecorationsCollection([{
-          range: new monaco.Range(line, 1, rangeEnd, Number.MAX_SAFE_INTEGER),
-          options: {
-            isWholeLine: true,
-            className: 'monaco-cited-range',
-            overviewRuler: { color: 'rgba(56, 139, 253, 0.6)', position: monaco.editor.OverviewRulerLane.Full },
-          },
-        }])
+        applyScroll(line, endLine)
       })
     }
   }

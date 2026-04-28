@@ -6,7 +6,7 @@
  *   History — list of past scans
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ChevronDown,
@@ -107,10 +107,22 @@ function ScanForm({ repoId, onSubmit }: ScanFormProps) {
   const [config, setConfig] = useState('auto')
   const [llm, setLlm] = useState(true)
   const [customConfig, setCustomConfig] = useState('')
-  // Fallback manual path (only shown when no repoSource is available)
+  // Fallback manual path (only shown when no repoSource is available and backend fetch fails)
   const [manualSource, setManualSource] = useState('')
+  // Source fetched from the backend for repos ingested via CLI or before store was populated
+  const [backendSource, setBackendSource] = useState<{ path: string; source_type: string } | null>(null)
+  const fetchedRef = useRef(false)
 
-  const resolvedSource = repoSource?.path ?? manualSource
+  useEffect(() => {
+    if (repoSource || fetchedRef.current) return
+    fetchedRef.current = true
+    api.getRepoSource(repoId)
+      .then((s) => setBackendSource({ path: s.path, source_type: s.source_type }))
+      .catch(() => {/* repo not found or no job — fall through to manual input */})
+  }, [repoId, repoSource])
+
+  const effectiveSource = repoSource ?? (backendSource ? { ...backendSource, github_token: undefined } : null)
+  const resolvedSource = effectiveSource?.path ?? manualSource
   const resolvedToken  = repoSource?.github_token ?? ''
 
   function handleSubmit(e: React.FormEvent) {
@@ -138,13 +150,13 @@ function ScanForm({ repoId, onSubmit }: ScanFormProps) {
       {/* Source — derived from the repo, shown as read-only info */}
       <div className="space-y-1">
         <span className="text-xs font-medium text-fg-muted">Scan target</span>
-        {repoSource ? (
+        {effectiveSource ? (
           <div className="flex items-center gap-2 rounded-md border border-border-default bg-canvas-subtle px-3 py-1.5">
             <span className="rounded bg-accent-subtle px-1.5 py-0.5 text-[10px] font-medium text-accent-fg">
-              {sourceTypeLabel[repoSource.source_type] ?? repoSource.source_type}
+              {sourceTypeLabel[effectiveSource.source_type] ?? effectiveSource.source_type}
             </span>
-            <span className="flex-1 truncate font-mono text-[11px] text-fg-default" title={repoSource.path}>
-              {repoSource.path}
+            <span className="flex-1 truncate font-mono text-[11px] text-fg-default" title={effectiveSource.path}>
+              {effectiveSource.path}
             </span>
             {resolvedToken && (
               <span className="text-[10px] text-fg-subtle">🔑 token</span>
