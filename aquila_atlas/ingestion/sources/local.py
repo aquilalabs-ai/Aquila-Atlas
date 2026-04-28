@@ -48,9 +48,12 @@ class LocalFolderLoader:
 
     def head_sha(self) -> str | None:
         """Return the current HEAD commit SHA for the local git repo, or None."""
+        import shutil  # noqa: PLC0415
+
+        git_exe = shutil.which("git") or "git"
         try:
             result = subprocess.run(
-                ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+                [git_exe, "-C", str(self.root), "rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -66,9 +69,12 @@ class LocalFolderLoader:
         Includes added, modified, and deleted files.  Only files that would
         normally be loaded (not ignored) are returned.
         """
+        import shutil as _shutil  # noqa: PLC0415
+
+        git_exe = _shutil.which("git") or "git"
         try:
             result = subprocess.run(
-                ["git", "-C", str(self.root), "diff", "--name-only", old_sha, new_sha],
+                [git_exe, "-C", str(self.root), "diff", "--name-only", old_sha, new_sha],
                 capture_output=True,
                 text=True,
                 check=True,

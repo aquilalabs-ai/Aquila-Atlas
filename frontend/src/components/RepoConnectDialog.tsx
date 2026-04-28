@@ -270,14 +270,16 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
         // Repo is already indexed — user has been granted access, no re-ingestion needed.
         qc.invalidateQueries({ queryKey: ['repos'] })
         setActiveRepoId(res.repo_id)
-        // Persist source so panels like SecurityPanel can pre-fill the target.
-        if (tab === 'local') {
-          setRepoSource(res.repo_id, { path: localFolderName, source_type: 'local' })
-        } else if (tab === 'remote') {
+        // Persist source for remote tabs so the sync button appears immediately.
+        // Local tab omitted — it uploads as a zip (server stores source_type:"zip"),
+        // so the Sidebar re-hydration will correctly leave the sync button hidden.
+        if (tab === 'remote') {
+          const tok = remoteToken.trim() || undefined
           setRepoSource(res.repo_id, {
             path:         remoteUrl.trim(),
             source_type:  remoteProvider,
-            github_token: remoteToken.trim() || undefined,
+            github_token: tok,
+            has_token:    !!tok,
           })
         }
         toast.success(`"${res.repo_id}" imported — you now have access.`)
@@ -298,13 +300,13 @@ export function RepoConnectDialog({ open, onOpenChange }: Props) {
   function handleComplete() {
     qc.invalidateQueries({ queryKey: ['repos'] })
     setActiveRepoId(repoId)
-    if (tab === 'local') {
-      setRepoSource(repoId.trim(), { path: localFolderName, source_type: 'local' })
-    } else if (tab === 'remote') {
+    if (tab === 'remote') {
+      const tok = remoteToken.trim() || undefined
       setRepoSource(repoId.trim(), {
         path:         remoteUrl.trim(),
         source_type:  remoteProvider,
-        github_token: remoteToken.trim() || undefined,
+        github_token: tok,
+        has_token:    !!tok,
       })
     }
     toast.success(`"${repoId}" is ready!`)

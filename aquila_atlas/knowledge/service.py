@@ -43,7 +43,13 @@ class KnowledgeService:
         return self.graph.get_context(function_id)
 
     def list_repo_ids(self) -> list[str]:
-        """Return all repository IDs that have been ingested."""
+        """Return all repository IDs from Neo4j (fast) with Qdrant as fallback."""
+        try:
+            ids = self.graph.list_repo_ids()
+            if ids:
+                return ids
+        except Exception:  # noqa: BLE001
+            pass
         return self.vector.list_repo_ids()
 
     def get_graph(self, repo_id: str) -> dict[str, list[dict[str, Any]]]:
@@ -57,7 +63,11 @@ class KnowledgeService:
         return {**graph_stats, **vector_stats}
 
     def list_files(self, repo_id: str) -> list[str]:
-        """Return all unique file paths ingested for *repo_id*."""
+        """Return all unique file paths for *repo_id* from Neo4j (fast) with Qdrant fallback."""
+        try:
+            return self.graph.list_files(repo_id)
+        except Exception:  # noqa: BLE001
+            pass
         return self.vector.list_files(repo_id)
 
     def get_file_chunks(self, repo_id: str, file_path: str) -> list[dict[str, Any]]:
