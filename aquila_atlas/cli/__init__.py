@@ -50,7 +50,13 @@ def ingest(
     svc = get_knowledge_service()
 
     typer.echo("Step 1/2 — ingesting graph…", nl=False)
-    svc.graph.ingest(repo_id=repo, label=loader.label(), entities=all_entities, commit_sha=None)
+    svc.graph.ingest(
+        repo_id=repo,
+        label=loader.label(),
+        entities=all_entities,
+        commit_sha=None,
+        source_type="local",
+    )
     typer.echo(" done.")
 
     typer.echo("Step 2/2 — embedding vectors…", nl=False)

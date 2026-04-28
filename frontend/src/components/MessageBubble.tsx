@@ -56,12 +56,8 @@ function FileBadge({
 }) {
   const openSource      = useAppStore((s) => s.openSource)
   const fileIndex       = useAppStore((s) => s.fileIndex)
-  const loadFileIndex   = useAppStore((s) => s.loadFileIndex)
   const [open, setOpen] = useState(false)
   const ref             = useRef<HTMLDivElement>(null)
-
-  // Load the index once per repo
-  useEffect(() => { void loadFileIndex(repoId) }, [repoId, loadFileIndex])
 
   // Close picker when clicking outside
   useEffect(() => {

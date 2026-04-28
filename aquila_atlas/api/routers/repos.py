@@ -200,21 +200,27 @@ def list_repos(svc: Svc, _auth: Auth, user: CurrentUser, request: Request) -> Re
 def get_repo_source(repo_id: str, svc: Svc, _auth: Auth) -> RepoSourceResponse:
     from aquila_atlas.api.tasks import latest_job_for_repo  # noqa: PLC0415
 
-    if repo_id not in svc.list_repo_ids():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Repo '{repo_id}' not found",
-        )
+    # Try the job store first (has token info); fall back to Neo4j (survives restarts).
+    # Deliberately avoid svc.list_repo_ids() here — it can trigger expensive Qdrant scroll.
     job = latest_job_for_repo(repo_id)
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No ingestion job found for this repo",
+    if job:
+        return RepoSourceResponse(
+            path=job.path,
+            source_type=job.source_type,
+            has_token=bool(job.github_token),
         )
-    return RepoSourceResponse(
-        path=job.path,
-        source_type=job.source_type,
-        has_token=bool(job.github_token),
+
+    graph_src = svc.graph.get_repo_source(repo_id)
+    if graph_src and graph_src.get("label") and graph_src.get("source_type"):
+        return RepoSourceResponse(
+            path=str(graph_src["label"]),
+            source_type=str(graph_src["source_type"]),
+            has_token=bool(graph_src.get("has_token", False)),
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Repo '{repo_id}' not found or no ingestion job on record",
     )
 
 

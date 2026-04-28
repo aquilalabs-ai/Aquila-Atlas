@@ -141,20 +141,36 @@ def triage_findings(
     1. Retrieve code context from vector store (if svc available).
     2. Send findings + code to LLM.
     3. Parse confirmed findings and new logic-level findings.
+
+    Gitleaks findings (secrets) are never sent to LLM triage — they are always real
+    and should never be dismissed as false positives.
     """
     if not findings_by_file:
         return []
 
+    # Separate gitleaks findings — pass them through unconditionally.
+    gitleaks_findings: list[Finding] = []
+    sast_by_file: dict[str, list[Finding]] = {}
+    for file_path, file_findings in findings_by_file.items():
+        sast = [f for f in file_findings if f.source != "gitleaks"]
+        leaked = [f for f in file_findings if f.source == "gitleaks"]
+        gitleaks_findings.extend(leaked)
+        if sast:
+            sast_by_file[file_path] = sast
+
+    if not sast_by_file:
+        return gitleaks_findings
+
     llm = _make_llm()
     prompt_template = _load_prompt()
-    triaged: list[Finding] = []
+    triaged: list[Finding] = list(gitleaks_findings)
 
-    files = list(findings_by_file.keys())
+    files = list(sast_by_file.keys())
     total = len(files)
 
     for i, file_path in enumerate(files):
         progress_callback and progress_callback(i, total, f"LLM triage: {file_path}")
-        file_findings = findings_by_file[file_path]
+        file_findings = sast_by_file[file_path]
 
         # Get code context for this file
         code_ctx = ""

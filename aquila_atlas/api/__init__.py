@@ -194,6 +194,38 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _log.warning("MCP tools unavailable — continuing without them", exc_info=True)
         app.state.mcp_tools = []
 
+    # Backfill source_type on Repository nodes that pre-date the source_type field.
+    # Infers type from the label: GitHub/GitLab/Gitea URLs are detected by hostname;
+    # anything else that looks like a URL → generic git clone; otherwise → local path.
+    try:
+        app.state.svc.graph.cypher_write(
+            """
+            MATCH (r:Repository)
+            WHERE r.source_type IS NULL AND r.label IS NOT NULL
+            SET r.source_type = CASE
+              WHEN r.label CONTAINS 'github.com'                              THEN 'github'
+              WHEN r.label CONTAINS 'gitlab.com' OR r.label CONTAINS 'gitlab' THEN 'gitlab'
+              WHEN r.label CONTAINS 'gitea'                                   THEN 'gitea'
+              WHEN r.label STARTS WITH 'http' OR r.label STARTS WITH 'git@'  THEN 'git'
+              ELSE 'local'
+            END
+            """,
+        )
+        _log.info("Repository source_type backfill complete")
+    except Exception:
+        _log.warning(
+            "Could not backfill Repository source_type — Neo4j may be unavailable", exc_info=True
+        )
+
+    # Clear stale has_token=true on local repos — local paths never need tokens.
+    # This fixes repos that had has_token set before it was tracked correctly.
+    try:
+        app.state.svc.graph.cypher_write(
+            "MATCH (r:Repository) WHERE r.source_type = 'local' AND r.has_token = true SET r.has_token = false",
+        )
+    except Exception:
+        _log.warning("Could not clear has_token on local repos", exc_info=True)
+
     yield
     app.state.svc.graph.close()
 

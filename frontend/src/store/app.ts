@@ -26,6 +26,7 @@ export interface RepoSource {
   path: string
   source_type: 'local' | 'github' | 'gitlab' | 'gitea' | 'git'
   github_token?: string
+  has_token?: boolean  // true when a token was provided at ingest time (used to prompt on resync)
 }
 
 interface AppState {
@@ -79,6 +80,9 @@ interface AppState {
   fileIndex: Record<string, string[]>
   loadFileIndex: (repoId: string) => Promise<void>
 }
+
+// Tracks in-flight loadFileIndex calls so concurrent renders don't fan out to the server.
+const _fileIndexLoading = new Set<string>()
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -191,12 +195,17 @@ export const useAppStore = create<AppState>()(
       // ── File index cache ──────────────────────────────────────────────
       fileIndex: {},
       loadFileIndex: async (repoId) => {
-        if (useAppStore.getState().fileIndex[repoId]) return
+        // Key-presence check (not truthiness) so an empty [] result counts as cached.
+        if (repoId in useAppStore.getState().fileIndex) return
+        if (_fileIndexLoading.has(repoId)) return
+        _fileIndexLoading.add(repoId)
         try {
           const res = await api.listFiles(repoId)
           set((s) => ({ fileIndex: { ...s.fileIndex, [repoId]: res.files } }))
         } catch {
-          // Leave empty — partial-path resolution will pass through unchanged
+          // Leave absent — next render will retry rather than caching a failure.
+        } finally {
+          _fileIndexLoading.delete(repoId)
         }
       },
     }),

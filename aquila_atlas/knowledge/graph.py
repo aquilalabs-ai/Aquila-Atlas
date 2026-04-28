@@ -138,6 +138,8 @@ class GraphStore:
         label: str,
         entities: list[CodeEntity],
         commit_sha: str | None = None,
+        source_type: str | None = None,
+        has_token: bool = False,
     ) -> None:
         """Ingest a list of parsed code entities into the graph.
 
@@ -153,7 +155,7 @@ class GraphStore:
         interfaces = [e for e in entities if e.type == "interface"]
 
         with self._driver.session() as session:
-            self._ingest_repo_node(session, repo_id, label, commit_sha)
+            self._ingest_repo_node(session, repo_id, label, commit_sha, source_type, has_token)
             self._ingest_file_nodes(session, repo_id, files)
             self._ingest_class_nodes(session, repo_id, classes)
             self._ingest_function_nodes(session, repo_id, functions)
@@ -172,8 +174,17 @@ class GraphStore:
         repo_id: str,
         label: str,
         commit_sha: str | None,
+        source_type: str | None = None,
+        has_token: bool = False,
     ) -> None:
-        session.execute_write(_write_repo, repo_id=repo_id, label=label, commit_sha=commit_sha)
+        session.execute_write(
+            _write_repo,
+            repo_id=repo_id,
+            label=label,
+            commit_sha=commit_sha,
+            source_type=source_type,
+            has_token=has_token,
+        )
 
     def _ingest_file_nodes(
         self,
@@ -469,6 +480,21 @@ class GraphStore:
 
         return counts
 
+    def list_repo_ids(self) -> list[str]:
+        """Return all repository IDs from Neo4j — O(1) vs scrolling all Qdrant chunks."""
+        with self._driver.session() as session:
+            result = session.run("MATCH (r:Repository) RETURN r.id AS id ORDER BY r.id")
+            return [str(record["id"]) for record in result if record["id"]]
+
+    def list_files(self, repo_id: str) -> list[str]:
+        """Return all file paths for *repo_id* from Neo4j File nodes."""
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (f:File {repo_id: $repo_id}) RETURN f.file_path AS path ORDER BY f.file_path",
+                repo_id=repo_id,
+            )
+            return [str(record["path"]) for record in result if record["path"]]
+
     def get_repo_commit_sha(self, repo_id: str) -> str | None:
         """Return the commit SHA stored on the Repository node, or None."""
         with self._driver.session() as session:
@@ -481,6 +507,22 @@ class GraphStore:
                 return None
             val = record["sha"]
             return str(val) if val else None
+
+    def get_repo_source(self, repo_id: str) -> dict[str, object] | None:
+        """Return ``{label, source_type, has_token}`` for the Repository node, or None if not found."""
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (r:Repository {id: $id}) RETURN r.label AS label, r.source_type AS source_type, r.has_token AS has_token",
+                id=repo_id,
+            )
+            record = result.single()
+            if record is None:
+                return None
+            return {
+                "label": str(record["label"]) if record["label"] else None,
+                "source_type": str(record["source_type"]) if record["source_type"] else None,
+                "has_token": bool(record["has_token"]) if record["has_token"] else False,
+            }
 
     def delete_files(self, repo_id: str, file_paths: list[str]) -> int:
         """Delete File nodes (and all their child nodes/edges) for the given paths.
@@ -534,6 +576,15 @@ class GraphStore:
         with self._driver.session() as session:
             result = session.run(cypher, **(params or {}))
             return [dict(record) for record in result]
+
+    def cypher_write(
+        self,
+        cypher: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """Execute an arbitrary write Cypher statement (no return value expected)."""
+        with self._driver.session() as session:
+            session.execute_write(lambda tx: tx.run(cypher, **(params or {})))
 
     def get_context(self, function_id: str) -> dict[str, object]:
         """Return callers, callees, file, and parent_class for a function/method.
@@ -683,15 +734,21 @@ def _write_repo(
     repo_id: str,
     label: str,
     commit_sha: str | None,
+    source_type: str | None = None,
+    has_token: bool = False,
 ) -> None:
     tx.run(
         """
         MERGE (r:Repository {id: $id})
         SET r.label = $label, r.commit_sha = $commit_sha
+          , r.source_type = CASE WHEN $source_type IS NOT NULL THEN $source_type ELSE r.source_type END
+          , r.has_token   = $has_token
         """,
         id=repo_id,
         label=label,
         commit_sha=commit_sha,
+        source_type=source_type,
+        has_token=has_token,
     )
 
 

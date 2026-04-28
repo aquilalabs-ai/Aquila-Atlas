@@ -238,6 +238,8 @@ def _sync_ingest(record: JobRecord) -> None:
         label=loader.label(),
         entities=all_entities,
         commit_sha=commit_sha,
+        source_type=record.source_type,
+        has_token=bool(record.github_token),
     )
     svc.ingest_chunks(chunks, repo_id=record.repo_id)
     # Free zip payload after ingestion — triggers Valkey key deletion in _update
@@ -278,7 +280,16 @@ def _sync_resync(record: JobRecord) -> None:
         raise ValueError(f"Source type '{record.source_type}' does not support resync.")
 
     new_sha: str | None = loader.head_sha()
+
     if new_sha is None:
+        import shutil as _shutil  # noqa: PLC0415
+
+        git_missing = _shutil.which("git") is None
+        if git_missing:
+            raise ValueError(
+                "git is not installed or not on PATH — cannot determine the current commit. "
+                "Install git and ensure it is accessible to the server process."
+            )
         raise ValueError(
             "This folder is not a git repository — resync requires git history to detect changes. "
             "If you want to refresh the index, run a full re-ingest instead."
@@ -314,6 +325,8 @@ def _sync_resync(record: JobRecord) -> None:
             label=loader.label(),
             entities=[],
             commit_sha=new_sha,
+            source_type=record.source_type,
+            has_token=bool(record.github_token),
         )
         return
 
@@ -339,6 +352,8 @@ def _sync_resync(record: JobRecord) -> None:
         label=loader.label(),
         entities=all_entities,
         commit_sha=new_sha,
+        source_type=record.source_type,
+        has_token=bool(record.github_token),
     )
     if chunks:
         svc.ingest_chunks(chunks, repo_id=record.repo_id)

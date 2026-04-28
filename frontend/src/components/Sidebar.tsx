@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   FolderGit2,
   Plus,
@@ -229,10 +229,24 @@ function RepoItem({
   onDeleteClick: (e: React.MouseEvent) => void
 }) {
   const repoSource   = useAppStore((s) => s.repoSources[repo])
+  const setRepoSource = useAppStore((s) => s.setRepoSource)
   const { phase, result, start, reset } = useResyncRepo(repo)
   const isRunning = phase === 'running'
 
-  const resyncAvailable = !!repoSource
+  // Show sync button only for sources the server can actually resync.
+  // 'local' needs an absolute path — browser zip-uploads store just a folder name.
+  const resyncAvailable = !!repoSource && (
+    repoSource.source_type !== 'local' ||
+    repoSource.path.startsWith('/') ||
+    /^[A-Za-z]:[/\\]/.test(repoSource.path)
+  )
+
+  // Prompt immediately only when we know a token was required at ingest time.
+  // For old/unknown repos we attempt the resync first and prompt on auth failure.
+  const isRemote = repoSource?.source_type !== 'local'
+  const needsToken = resyncAvailable && !!repoSource?.has_token && !repoSource.github_token
+  const [tokenPromptOpen, setTokenPromptOpen] = useState(false)
+  const [tokenInput, setTokenInput] = useState('')
 
   // Toast on completion
   useEffect(() => {
@@ -245,7 +259,13 @@ function RepoItem({
       }
       reset()
     } else if (phase === 'error' && result) {
-      toast.error(`Resync failed: ${result.error ?? 'unknown error'}`)
+      const msg = result.error ?? 'unknown error'
+      const isAuthError = isRemote && /401|403|unauthorized|forbidden|authentication|rate.?limit|token/i.test(msg)
+      if (isAuthError) {
+        setTokenPromptOpen(true)
+      } else {
+        toast.error(`Resync failed: ${msg}`)
+      }
       reset()
     }
   }, [phase, result, repo, reset])
@@ -253,12 +273,29 @@ function RepoItem({
   async function handleResync(e: React.MouseEvent) {
     e.stopPropagation()
     if (!repoSource || isRunning) return
+    if (needsToken) {
+      setTokenPromptOpen(true)
+      return
+    }
     await start(repoSource)
+  }
+
+  async function handleTokenSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!repoSource) return
+    const tok = tokenInput.trim() || undefined
+    // Clearing the token marks the repo as public — has_token gets corrected in the graph on resync.
+    const updated = { ...repoSource, github_token: tok, has_token: !!tok }
+    setRepoSource(repo, updated)
+    setTokenPromptOpen(false)
+    setTokenInput('')
+    await start(updated)
   }
 
   const canResync = !!repoSource && !isRunning
 
   return (
+    <>
     <button
       onClick={onSelect}
       className={cn(
@@ -278,7 +315,7 @@ function RepoItem({
           tabIndex={0}
           onClick={(e) => void handleResync(e)}
           onKeyDown={(e) => e.key === 'Enter' && void handleResync(e as unknown as React.MouseEvent)}
-          title={isRunning ? 'Resyncing…' : 'Resync embeddings from latest commits'}
+          title={isRunning ? 'Resyncing…' : needsToken ? 'Token required — click to provide' : 'Resync embeddings from latest commits'}
           className={cn(
             'hidden rounded p-0.5 transition-colors group-hover:block',
             canResync
@@ -308,6 +345,59 @@ function RepoItem({
 
       {isActive && <ChevronRight className="h-3 w-3 flex-shrink-0" />}
     </button>
+
+    {/* Token prompt modal for private repos after logout */}
+    {tokenPromptOpen && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+        onClick={() => setTokenPromptOpen(false)}
+      >
+        <form
+          className="w-80 rounded-lg border border-border-default bg-canvas-overlay p-5 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+          onSubmit={(e) => void handleTokenSubmit(e)}
+        >
+          <p className="mb-1 text-sm font-medium text-fg-default">Access token required</p>
+          <p className="mb-3 text-xs text-fg-muted">
+            This repo was ingested with a token. Re-enter it to resync <strong>{repo}</strong>.
+          </p>
+          <input
+            autoFocus
+            type="password"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="ghp_… / glpat-… / token"
+            className="mb-3 w-full rounded border border-border-default bg-canvas-inset px-3 py-1.5 text-xs text-fg-default placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-accent-emphasis"
+          />
+          <p className="mb-3 text-[11px] text-fg-subtle">
+            Public repo?{' '}
+            <button
+              type="submit"
+              className="underline underline-offset-2 hover:text-fg-default"
+            >
+              Resync without token
+            </button>
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setTokenPromptOpen(false)}
+              className="rounded px-3 py-1.5 text-xs text-fg-muted hover:bg-canvas-subtle"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!tokenInput.trim()}
+              className="rounded bg-accent-emphasis px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+            >
+              Resync
+            </button>
+          </div>
+        </form>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -324,6 +414,7 @@ export function Sidebar({ onAdminOpen }: { onAdminOpen?: () => void }) {
 
   const activeRepoId      = useAppStore((s) => s.activeRepoId)
   const setActiveRepo     = useAppStore((s) => s.setActiveRepoId)
+  const setRepoSource     = useAppStore((s) => s.setRepoSource)
 
   // If the persisted activeRepoId is not in the accessible repo list (e.g. after
   // a user switch or membership change), clear it so we don't show inaccessible data.
@@ -332,6 +423,30 @@ export function Sidebar({ onAdminOpen }: { onAdminOpen?: () => void }) {
       setActiveRepo(null)
     }
   }, [data, isLoading, activeRepoId, setActiveRepo])
+
+  // Re-hydrate repoSources from the backend on first load so the sync button
+  // always reflects the real source type, even after logout (which clears the
+  // store) or when the dialog stored a stale 'local' entry for a zip upload.
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (!data?.repos || hydratedRef.current) return
+    hydratedRef.current = true
+    for (const repoId of data.repos) {
+      api.getRepoSource(repoId)
+        .then((src) => {
+          // Zip-uploaded repos can't be resynced — omit them from the store
+          // so the sync button stays hidden.
+          if (src.source_type === 'zip') return
+          setRepoSource(repoId, {
+            path: src.path,
+            source_type: src.source_type as 'local' | 'github' | 'gitlab' | 'gitea' | 'git',
+            has_token: src.has_token,
+          })
+        })
+        .catch(() => { /* no job record (CLI-ingested or zip) — sync button stays hidden */ })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.repos])
   const theme             = useAppStore((s) => s.theme)
   const toggleTheme       = useAppStore((s) => s.toggleTheme)
   const authUser          = useAppStore((s) => s.authUser)
