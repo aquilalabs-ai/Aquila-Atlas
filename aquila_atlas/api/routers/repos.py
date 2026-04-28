@@ -14,13 +14,14 @@ from fastapi import (
     status,
 )
 
-from aquila_atlas.api.deps import Auth, Svc  # noqa: TC001
+from aquila_atlas.api.deps import Auth, CurrentUser, Svc  # noqa: TC001
 from aquila_atlas.api.models import (
     DeleteRepoResponse,
     ErrorResponse,
     IngestRequest,
     IngestResponse,
     RepoListResponse,
+    RepoSourceResponse,
     RepoStatsResponse,
     ResyncResponse,
 )
@@ -44,7 +45,24 @@ async def trigger_ingestion(
     req: IngestRequest,
     background_tasks: BackgroundTasks,
     _auth: Auth,
+    user: CurrentUser,
+    svc: Svc,
+    request: Request,
 ) -> IngestResponse:
+    # If the repo already exists, just grant the requesting user access to it
+    # rather than re-ingesting all data.
+    if req.repo_id in svc.list_repo_ids():
+        if user is not None:
+            auth_store = getattr(request.app.state, "auth_store", None)
+            if auth_store is not None:
+                try:
+                    existing = auth_store.get_repo_member(req.repo_id, user["id"])
+                    if not existing:
+                        auth_store.add_repo_member(req.repo_id, user["id"], "member")
+                except Exception:  # noqa: BLE001
+                    pass
+        return IngestResponse(job_id="", repo_id=req.repo_id, status="already_exists")
+
     record = create_job(
         repo_id=req.repo_id,
         path=req.path,
@@ -52,6 +70,16 @@ async def trigger_ingestion(
         github_token=req.github_token,
     )
     background_tasks.add_task(run_ingestion, record.job_id)
+
+    # Register the submitting user as repo owner when auth is enabled
+    if user is not None:
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if auth_store is not None:
+            import contextlib  # noqa: PLC0415
+
+            with contextlib.suppress(Exception):
+                auth_store.add_repo_member(req.repo_id, user["id"], "owner")
+
     return IngestResponse(job_id=record.job_id, repo_id=record.repo_id, status=record.status)
 
 
@@ -143,9 +171,51 @@ async def resync_repo(
     description="Returns every repository ID that has at least one chunk in the vector store.",
     responses={401: {"model": ErrorResponse, "description": "Invalid or missing API key"}},
 )
-def list_repos(svc: Svc, _auth: Auth) -> RepoListResponse:
+def list_repos(svc: Svc, _auth: Auth, user: CurrentUser, request: Request) -> RepoListResponse:
     repo_ids = svc.list_repo_ids()
+
+    # When auth is enabled, non-admin users only see repos they are members of.
+    if user is not None and user.get("role") != "admin":
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if auth_store is not None:
+            try:
+                allowed = set(auth_store.list_user_repos(user["id"]))
+                repo_ids = [r for r in repo_ids if r in allowed]
+            except Exception:  # noqa: BLE001
+                pass  # degrade gracefully — return full list on store error
+
     return RepoListResponse(repos=repo_ids, total=len(repo_ids))
+
+
+@router.get(
+    "/{repo_id}/source",
+    response_model=RepoSourceResponse,
+    summary="Repo ingestion source",
+    description="Returns the path and source type from the most recent ingestion job for the repo.",
+    responses={
+        401: {"model": ErrorResponse, "description": "Invalid or missing API key"},
+        404: {"model": ErrorResponse, "description": "Repo not found or no job on record"},
+    },
+)
+def get_repo_source(repo_id: str, svc: Svc, _auth: Auth) -> RepoSourceResponse:
+    from aquila_atlas.api.tasks import latest_job_for_repo  # noqa: PLC0415
+
+    if repo_id not in svc.list_repo_ids():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Repo '{repo_id}' not found",
+        )
+    job = latest_job_for_repo(repo_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No ingestion job found for this repo",
+        )
+    return RepoSourceResponse(
+        path=job.path,
+        source_type=job.source_type,
+        has_token=bool(job.github_token),
+    )
 
 
 @router.get(

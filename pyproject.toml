@@ -29,6 +29,12 @@ dependencies = [
     "tree-sitter-javascript>=0.23",
     "tree-sitter-typescript>=0.23",
     "tree-sitter-language-pack>=0.7",
+    "semgrep>=1.161.0",
+    "checkov>=3.2",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "ldap3>=2.9",
+    "streamlit>=1.56.0",
 ]
 
 [project.scripts]
@@ -70,3 +76,8 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--tb=short"
+filterwarnings = [
+    # pydantic.v1 compat shim warns unconditionally on Python ≥ 3.14;
+    # suppress until langchain-core drops the pydantic v1 dependency.
+    "ignore:Core Pydantic V1 functionality isn't compatible with Python 3.14:UserWarning",
+]

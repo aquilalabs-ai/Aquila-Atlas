@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from 'react'
+import { useCallback, useRef, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { streamChat } from '@/lib/sse'
 import { api } from '@/lib/api'
@@ -23,11 +23,14 @@ export function useChat(repoId: string) {
     activeSessionId ? (s.chatMessages[activeSessionId] ?? []) : [],
   )
 
+  const setChatMessages = useAppStore((s) => s.setChatMessages)
+
   const abortCtlRef  = useRef<AbortController | null>(null)
   const isLoadingRef = useRef(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   const lastMsg   = messages[messages.length - 1]
-  const isLoading = lastMsg?.role === 'assistant' && lastMsg?.isStreaming === true
+  const isLoading = (lastMsg?.role === 'assistant' && lastMsg?.isStreaming === true) || historyLoading
 
   // When the repo changes, release the loading lock for the new context.
   // Do NOT abort the old stream — let it complete in the background so its
@@ -35,6 +38,30 @@ export function useChat(repoId: string) {
   useEffect(() => {
     isLoadingRef.current = false
   }, [repoId])
+
+  // When switching to a session that has server-side history but no local cache
+  // (e.g. after a logout/login), fetch the history from the server.
+  useEffect(() => {
+    if (!activeSessionId) return
+    const localMessages = useAppStore.getState().chatMessages[activeSessionId]
+    if (localMessages && localMessages.length > 0) return
+    const sessionInfo = useAppStore.getState().sessions[activeSessionId]
+    if (!sessionInfo || sessionInfo.message_count === 0) return
+
+    setHistoryLoading(true)
+    api.getSessionMessages(repoId, activeSessionId)
+      .then((msgs) => {
+        if (msgs.length === 0) return
+        const hydrated: ChatMessage[] = msgs.map((m) => ({
+          id:   crypto.randomUUID(),
+          role: m.role,
+          content: m.content,
+        }))
+        setChatMessages(activeSessionId, hydrated)
+      })
+      .catch(() => { /* best-effort — silently ignore if history unavailable */ })
+      .finally(() => setHistoryLoading(false))
+  }, [activeSessionId, repoId, setChatMessages])
 
   const send = useCallback(
     async (content: string) => {

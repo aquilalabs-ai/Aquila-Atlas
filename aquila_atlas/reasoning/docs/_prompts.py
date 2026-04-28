@@ -56,6 +56,14 @@ _STYLE_DESC: dict[str, dict[str, str]] = {
         "technical": "Technical — include parameters, return types, error handling, side effects at each step",
         "functional": "Functional — explain what happens at each step in plain language, what inputs/outputs are expected",
     },
+    "user_guide": {
+        "technical": "Technical — include exact CLI flags, environment variables, API request/response shapes",
+        "functional": "Functional — explain features in plain language, focus on outcomes and workflows",
+    },
+    "developer_guide": {
+        "technical": "Technical — include file paths, function signatures, design patterns, and type contracts",
+        "functional": "Functional — explain the high-level purpose of each component and how they interact",
+    },
 }
 
 # Loaded once at import time — restart the server to pick up edits.
@@ -64,6 +72,8 @@ _PROMPT_PER_MODULE = _load_docs_prompt("docs_per_module")
 _PROMPT_PER_FILE = _load_docs_prompt("docs_per_file")
 _PROMPT_SUBSYSTEMS = _load_docs_prompt("docs_subsystems")
 _PROMPT_FLOWS = _load_docs_prompt("docs_flows")
+_PROMPT_USER_GUIDE = _load_docs_prompt("docs_user_guide")
+_PROMPT_DEVELOPER_GUIDE = _load_docs_prompt("docs_developer_guide")
 
 _LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",

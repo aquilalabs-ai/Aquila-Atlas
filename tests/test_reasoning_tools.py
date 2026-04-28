@@ -51,12 +51,17 @@ def test_get_tools_includes_expected_tools() -> None:
         "git_status",
         "git_diff",
         "git_blame",
+        # Test generation
+        "generate_tests",
+        # Security
+        "security_scan",
+        "list_security_findings",
     }
     assert tool_names == expected
 
 
 def test_get_tools_count() -> None:
-    """Factory must register exactly 16 tools."""
+    """Factory must register exactly 19 tools."""
     from aquila_atlas.reasoning.tools import get_tools
 
     class DummyService:
@@ -68,4 +73,4 @@ def test_get_tools_count() -> None:
     ):
         tools = get_tools(service=DummyService())
 
-    assert len(tools) == 16
+    assert len(tools) == 19

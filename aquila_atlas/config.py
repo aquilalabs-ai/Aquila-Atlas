@@ -59,6 +59,38 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
     langsmith_project: str = "aquila-atlas"
 
+    # ---------------------------------------------------------------------------
+    # Identity, Auth & License (Phase 11)
+    # ---------------------------------------------------------------------------
+
+    # Auth mode: disabled | key | ldap | both
+    # "disabled" (default) preserves all existing behaviour exactly.
+    auth_mode: str = "disabled"
+
+    # RS256-signed instance license JWT issued by the vendor.
+    # Leave empty in open/dev mode.
+    aquila_license_key: str = ""
+
+    # HS256 secret used to sign session access/refresh tokens.
+    # MUST be changed for production deployments.
+    aquila_jwt_secret: str = "change-me-in-production"
+
+    # Number of days of inactivity after which a seat is considered idle.
+    seat_idle_days: int = 30
+
+    # LDAP / Active Directory connection details (only needed when auth_mode=ldap|both)
+    ldap_url: str = ""  # e.g. ldap://192.168.1.10:389
+    ldap_bind_dn: str = ""  # e.g. cn=svc,dc=acme,dc=com
+    ldap_bind_password: str = ""
+    ldap_user_base: str = ""  # e.g. ou=users,dc=acme,dc=com
+    ldap_user_filter: str = "(mail={username})"  # {username} is substituted at runtime
+    ldap_required_group: str = ""  # optional DN; user must be member if set
+
+    # Vendor RSA-2048 public key PEM used to validate license JWTs.
+    # Leave empty to fall back to the embedded DEV key (see aquila_atlas/api/auth/license.py).
+    # Generate a fresh pair with: python scripts/generate_keypair.py
+    aquila_vendor_public_key: str = ""
+
 
 settings = Settings()
 

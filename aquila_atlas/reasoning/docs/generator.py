@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("aquila.docs_generator")
 
-DocScope = Literal["architecture", "per_module", "per_file", "subsystem", "flows"]
+DocScope = Literal[
+    "architecture", "per_module", "per_file", "subsystem", "flows", "user_guide", "developer_guide"
+]
 
 
 class GenerationCancelled(BaseException):
@@ -54,10 +56,12 @@ def generate_docs(
     """
     from ._llm import _make_llm  # noqa: PLC0415
     from .scopes.architecture import _generate_architecture  # noqa: PLC0415
+    from .scopes.developer_guide import _generate_developer_guide  # noqa: PLC0415
     from .scopes.flows import _generate_flows  # noqa: PLC0415
     from .scopes.per_file import _generate_per_file  # noqa: PLC0415
     from .scopes.per_module import _generate_per_module  # noqa: PLC0415
     from .scopes.subsystems import _generate_subsystems  # noqa: PLC0415
+    from .scopes.user_guide import _generate_user_guide  # noqa: PLC0415
 
     llm = _make_llm()
 
@@ -76,6 +80,8 @@ def generate_docs(
         "per_file": _generate_per_file,
         "subsystem": _generate_subsystems,
         "flows": _generate_flows,
+        "user_guide": _generate_user_guide,
+        "developer_guide": _generate_developer_guide,
     }
 
     generator = dispatch.get(scope)

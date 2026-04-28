@@ -26,6 +26,11 @@ export async function* streamChat(
   const key  = import.meta.env.VITE_API_KEY  as string | undefined
   const hdrs: Record<string, string> = { 'Content-Type': 'application/json' }
   if (key) hdrs['X-API-Key'] = key
+  try {
+    const { useAppStore } = await import('@/store/app')
+    const token = useAppStore.getState().authToken
+    if (token) hdrs['Authorization'] = `Bearer ${token}`
+  } catch { /* ignore */ }
 
   const res = await fetch(`${base}/repos/${encodeURIComponent(repoId)}/chat`, {
     method: 'POST',

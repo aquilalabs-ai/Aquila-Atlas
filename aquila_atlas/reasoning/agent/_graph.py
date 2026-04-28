@@ -16,6 +16,7 @@ def build_graph(
     service: KnowledgeService,
     settings: Settings,
     extra_tools: list[BaseTool] | None = None,
+    security_store: object | None = None,
 ) -> CompiledStateGraph[Any]:
     """Compile the LangGraph state machine.
 
@@ -40,7 +41,9 @@ def build_graph(
 
     llm = get_chat_model(settings, streaming=True)
 
-    all_tools = get_knowledge_tools(service, settings) + (extra_tools or [])
+    all_tools = get_knowledge_tools(service, settings, security_store=security_store) + (
+        extra_tools or []
+    )
     llm_with_tools = llm.bind_tools(all_tools)
 
     def router_node(state: AgentState) -> dict[str, Any]:

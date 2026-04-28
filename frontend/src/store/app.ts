@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { SessionInfo } from '@/lib/api'
+import type { SessionInfo, AuthUser } from '@/lib/api'
+import { api } from '@/lib/api'
+
+export type { AuthUser }
 
 export interface SourceLocation {
   repoId: string
@@ -26,6 +29,17 @@ export interface RepoSource {
 }
 
 interface AppState {
+  // Auth
+  authToken: string | null
+  authRefreshToken: string | null
+  authUser: AuthUser | null
+  authDisabled: boolean   // true when backend has AUTH_MODE=disabled
+  authChecked: boolean    // true once the startup /auth/me check has completed
+  setAuth: (token: string, refreshToken: string, user: AuthUser) => void
+  clearAuth: () => void
+  setAuthDisabled: () => void
+  setAuthChecked: () => void
+
   // Theme
   theme: 'dark' | 'light'
   toggleTheme: () => void
@@ -60,11 +74,42 @@ interface AppState {
   sourceLocation: SourceLocation | null
   openSource: (loc: SourceLocation) => void
   closeSource: () => void
+
+  // File index cache (repoId → sorted file paths) — not persisted
+  fileIndex: Record<string, string[]>
+  loadFileIndex: (repoId: string) => Promise<void>
 }
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
+      // ── Auth ──────────────────────────────────────────────────────────
+      authToken: null,
+      authRefreshToken: null,
+      authUser: null,
+      authDisabled: false,
+      authChecked: false,
+      setAuth: (token, refreshToken, user) =>
+        set({ authToken: token, authRefreshToken: refreshToken, authUser: user, authChecked: true }),
+      clearAuth: () =>
+        set({
+          authToken: null,
+          authRefreshToken: null,
+          authUser: null,
+          authChecked: true,
+          // Clear all repo-scoped state so a new user session starts clean.
+          activeRepoId: null,
+          activeSessions: {},
+          chatMessages: {},
+          sessions: {},
+          repoSources: {},
+          sourceLocation: null,
+        }),
+      setAuthDisabled: () =>
+        set({ authDisabled: true, authChecked: true }),
+      setAuthChecked: () =>
+        set({ authChecked: true }),
+
       // ── Theme ─────────────────────────────────────────────────────────
       theme: 'dark',
       toggleTheme: () =>
@@ -142,16 +187,31 @@ export const useAppStore = create<AppState>()(
       sourceLocation: null,
       openSource: (loc) => set({ sourceLocation: loc }),
       closeSource: () => set({ sourceLocation: null }),
+
+      // ── File index cache ──────────────────────────────────────────────
+      fileIndex: {},
+      loadFileIndex: async (repoId) => {
+        if (useAppStore.getState().fileIndex[repoId]) return
+        try {
+          const res = await api.listFiles(repoId)
+          set((s) => ({ fileIndex: { ...s.fileIndex, [repoId]: res.files } }))
+        } catch {
+          // Leave empty — partial-path resolution will pass through unchanged
+        }
+      },
     }),
     {
       name: 'aquila-atlas-ui-v3',
       partialize: (s) => ({
-        theme:          s.theme,
-        activeRepoId:   s.activeRepoId,
-        activeSessions: s.activeSessions,
-        chatMessages:   s.chatMessages,
-        sessions:       s.sessions,
-        repoSources:    s.repoSources,
+        theme:             s.theme,
+        activeRepoId:      s.activeRepoId,
+        activeSessions:    s.activeSessions,
+        chatMessages:      s.chatMessages,
+        sessions:          s.sessions,
+        repoSources:       s.repoSources,
+        authToken:         s.authToken,
+        authRefreshToken:  s.authRefreshToken,
+        authUser:          s.authUser,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {

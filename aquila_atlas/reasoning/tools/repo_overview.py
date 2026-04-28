@@ -59,10 +59,10 @@ class RepoOverviewTool(BaseTool):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def _run(self, repo_id: str, max_entry_points: int = 3) -> str:
+    def _run(self, repo_id: str, max_entry_points: int = 6) -> str:
         logger.debug("tool=repo_overview repo=%s max_eps=%d", repo_id, max_entry_points)
         svc = cast("KnowledgeService", self.service)
-        max_entry_points = max(1, min(max_entry_points, 5))
+        max_entry_points = max(1, min(max_entry_points, 6))
 
         # ── 1. All entry points (ranked by graph, re-scored here) ────────
         all_eps = svc.get_entry_points(repo_id)

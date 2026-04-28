@@ -18,18 +18,56 @@ if TYPE_CHECKING:
 
     from ._state import _RouteType
 
+# Tool results larger than this are truncated before being sent to the LLM.
+# This prevents the synthesis call from overflowing the model's context window
+# when tools like repo_overview or module_map return large payloads.
+_MAX_TOOL_RESULT_CHARS = 12_000
+
 
 def _msg_text(content: Any) -> str:
     """Extract plain text from an LLM message content field.
 
     Handles both plain strings and the list-of-blocks format used by some
     OpenAI-compatible providers: ``[{"type": "text", "text": "..."}]``.
+    Falls back to any dict with a "text" key when no standard "text" block is
+    present (covers providers that use "output_text", "answer", etc.).
     """
     if isinstance(content, list):
-        return "".join(
+        typed = "".join(
             p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
         )
+        if typed:
+            return typed
+        return "".join(p.get("text", "") for p in content if isinstance(p, dict))
     return str(content) if content else ""
+
+
+def _cap_tool_messages(messages: list[Any]) -> list[Any]:
+    """Truncate each ToolMessage to _MAX_TOOL_RESULT_CHARS.
+
+    Tool results (repo_overview, module_map, semantic_search, …) can be very
+    large.  Sending them verbatim pushes the synthesis call over the model's
+    context ceiling, causing it to return an empty response.  Capping each
+    result to a fixed size keeps total context predictable without losing the
+    essential information.
+    """
+    from langchain_core.messages import ToolMessage  # noqa: PLC0415
+
+    out: list[Any] = []
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            text = _msg_text(getattr(m, "content", ""))
+            if len(text) > _MAX_TOOL_RESULT_CHARS:
+                trimmed = text[:_MAX_TOOL_RESULT_CHARS] + "\n…[truncated]"
+                logger.debug(
+                    "agent[reasoning] capped tool result %d→%d chars tool_call_id=%s",
+                    len(text),
+                    len(trimmed),
+                    getattr(m, "tool_call_id", "?"),
+                )
+                m = ToolMessage(content=trimmed, tool_call_id=m.tool_call_id)
+        out.append(m)
+    return out
 
 
 def _router_node(state: AgentState, llm: Any) -> dict[str, Any]:
@@ -176,7 +214,12 @@ async def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
             "write a complete, final answer for the user right now."
         )
 
-    messages: list[Any] = [SystemMessage(content=system_content), *messages_list]
+    # Cap individual tool results to prevent the synthesis call from overflowing
+    # the model's context window when tools return large payloads.
+    messages: list[Any] = [
+        SystemMessage(content=system_content),
+        *_cap_tool_messages(messages_list),
+    ]
     logger.debug(
         "agent[reasoning] prompt messages=%d system_len=%d tool_calls_so_far=%d",
         len(messages),
@@ -198,21 +241,19 @@ async def _reasoning_node(state: AgentState, llm: Any) -> dict[str, Any]:
     # synthesis pass so the user never receives a blank response.
     if not response_text and not tool_calls:
         has_tool_results = tool_call_count > 0
-        if has_tool_results:
-            recovery_content = (
-                "Your last action produced no output. "
-                "Using the tool results already in this conversation, "
-                "write a complete answer for the user. "
-                "Do not call any more tools."
-            )
-        else:
-            recovery_content = (
+        recovery_content = (
+            "Using the tool results already in this conversation, "
+            "write a complete answer for the user. Do not call any more tools."
+            if has_tool_results
+            else (
                 "Your last response was empty. "
                 "Please provide a complete, helpful answer to the user's question "
                 "based on the context provided. Do not call any tools."
             )
+        )
         logger.warning(
-            "agent[reasoning] empty response — forcing recovery pass (has_tool_results=%s)",
+            "agent[reasoning] empty response finish_reason=%s — recovery pass (has_tool_results=%s)",
+            (getattr(response, "response_metadata", {}) or {}).get("finish_reason"),
             has_tool_results,
         )
         recovery = await llm.ainvoke(messages + [HumanMessage(content=recovery_content)])

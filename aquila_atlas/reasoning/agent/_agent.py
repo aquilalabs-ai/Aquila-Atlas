@@ -56,6 +56,7 @@ class CodebaseAgent:
         repo_id: str,
         settings: Settings | None = None,
         extra_tools: list[BaseTool] | None = None,
+        security_store: object | None = None,
     ) -> None:
         from aquila_atlas.config import get_settings  # noqa: PLC0415
         from aquila_atlas.reasoning.llm import get_chat_model  # noqa: PLC0415
@@ -65,7 +66,9 @@ class CodebaseAgent:
 
         s = settings or get_settings()
         _configure_langsmith(s)
-        self._graph = build_graph(service, s, extra_tools=extra_tools)
+        self._graph = build_graph(
+            service, s, extra_tools=extra_tools, security_store=security_store
+        )
         self._repo_id = repo_id
         self._history: list[BaseMessage] = []
         self._settings = s
@@ -291,7 +294,16 @@ class CodebaseAgent:
                 accumulated = await self._retry_bare_async()
                 if accumulated:
                     yield {"token": accumulated}
-            self._history.append(AIMessage(content=accumulated))
+            if accumulated:
+                self._history.append(AIMessage(content=accumulated))
+            else:
+                # Roll back the HumanMessage so history stays consistent and
+                # the next attempt doesn't inherit a trailing empty AI turn.
+                if self._history and isinstance(self._history[-1], HumanMessage):
+                    self._history.pop()
+                logger.warning(
+                    "agent[astream_with_status] no response produced — rolling back history"
+                )
 
     async def achat(self, query: str) -> str:
         """Async version of :meth:`chat` — required when MCP tools are active.
@@ -407,7 +419,12 @@ class CodebaseAgent:
             accumulated = await self._retry_bare_async()
             if accumulated:
                 yield accumulated
-        self._history.append(AIMessage(content=accumulated))
+        if accumulated:
+            self._history.append(AIMessage(content=accumulated))
+        else:
+            if self._history and isinstance(self._history[-1], HumanMessage):
+                self._history.pop()
+            logger.warning("agent[astream] no response produced — rolling back history")
 
     # ------------------------------------------------------------------
     # Bare-LLM retry helpers
