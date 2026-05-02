@@ -53,6 +53,8 @@ def validate_with_node(diagram: str) -> list[str]:
             ["node", _NODE_SCRIPT, clean],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=_FRONTEND_DIR,
             timeout=15,
         )

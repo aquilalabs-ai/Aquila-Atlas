@@ -15,8 +15,19 @@ import type { Components } from 'react-markdown'
 // Also used by the anchor renderer for local markdown links.
 // ---------------------------------------------------------------------------
 
+// Known source/config file extensions — prevents identifiers like `api.fileChunks`
+// from being mistaken for file citations.
+const _EXTS =
+  'py|tsx?|jsx?|mjs|cjs|go|rs|java|kts?|cs|cpp|cc|cxx|c|h|hpp|rb|php|swift|' +
+  'scala|lua|sh|bash|zsh|ps1|mdx?|txt|rst|json|ya?ml|toml|ini|cfg|conf|env|' +
+  'html?|css|scss|sass|less|vue|svelte|sql|tf|hcl|xml|proto|graphql|gql|' +
+  'dockerfile|makefile|lock|mod|sum'
 // Line numbers are optional; accept both regular hyphen and non-breaking hyphen (U+2011)
-const CITATION_RE = /^([\w./-]+\.[a-zA-Z0-9]+)(?::(\d+)(?:[-‑](\d+))?)?$/
+// Extension group is non-capturing (?:...) so match indices stay: [1]=path [2]=line [3]=endLine
+const CITATION_RE = new RegExp(
+  `^([\\w./-]+\\.(?:${_EXTS}))(?::(\\d+)(?:[-‑](\\d+))?)?$`,
+  'i',
+)
 
 // GitHub-style anchor: path/to/file.py#L42  or  path/to/file.py#L42-L50
 const GITHUB_ANCHOR_RE = /^(.+?)#L(\d+)(?:-L(\d+))?$/
@@ -56,8 +67,12 @@ function FileBadge({
 }) {
   const openSource      = useAppStore((s) => s.openSource)
   const fileIndex       = useAppStore((s) => s.fileIndex)
+  const loadFileIndex   = useAppStore((s) => s.loadFileIndex)
   const [open, setOpen] = useState(false)
   const ref             = useRef<HTMLDivElement>(null)
+
+  // Trigger index load on first render for this repo (no-op if already cached/loading)
+  useEffect(() => { void loadFileIndex(repoId) }, [repoId, loadFileIndex])
 
   // Close picker when clicking outside
   useEffect(() => {

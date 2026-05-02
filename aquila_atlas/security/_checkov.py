@@ -73,6 +73,8 @@ def run_checkov(path: str) -> list[Finding]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_CHECKOV_TIMEOUT,
             shell=use_shell,
         )

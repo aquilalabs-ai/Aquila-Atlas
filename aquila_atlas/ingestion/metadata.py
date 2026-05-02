@@ -52,3 +52,6 @@ class CodeChunk:
     token_count: int
     chunk_index: int  # 0-based
     chunk_total: int
+    # Per-chunk absolute line range in the original file (0 = inherit from entity)
+    start_line: int = 0
+    end_line: int = 0

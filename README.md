@@ -19,7 +19,8 @@ Navigate, understand, and refactor legacy systems with natural language. Aquila-
 - **Natural language Q&A** — Ask "Where is user authentication handled?" or "What breaks if I change this file?"
 - **AI-generated documentation** — Auto-generate per-file, per-module, architecture, subsystem, and execution-flow docs in 8 languages
 - **Multi-language test generation** — Generate pytest, Jest, JUnit, Go test, RSpec and more scaffolds with syntax validation and fix loop
-- **Security scanning** — semgrep + gitleaks static analysis followed by LLM triage: false-positive filtering, fix suggestions, OWASP Top 10 classification
+- **Security scanning** — semgrep + gitleaks + trivy + checkov static analysis followed by LLM triage: false-positive filtering, fix suggestions, OWASP Top 10 classification
+- **Auth & licensing** — offline RSA instance license, per-seat key activation, LDAP/AD integration, session management, admin API
 
 ## Architecture
 
@@ -102,6 +103,7 @@ Structural queries use MCP tools (`get-schema`, `read-cypher`) against Neo4j dir
 | Phase 8 — Test Delivery | ✅ Done | Annotated ZIP with per-file headers, README, CI snippet; Tests tab in UI |
 | Phase 9 — Compilability | ✅ Done | Per-language syntax validation (9 languages), validate → fix loop (max 3 retries), generation quality guardrails |
 | Phase 10 — Security UI | ✅ Done | SecurityPanel with findings explorer, severity filter, scan history; Security tab in main UI |
+| Phase 11 — Auth & Licensing | ✅ Done | Offline RSA instance license, per-seat key activation, LDAP/AD auth, admin API, login UI |
 
 ---
 
@@ -168,6 +170,12 @@ MCP_URL=http://localhost:8080/mcp
 
 # API auth — leave blank for open/dev mode
 API_KEY=
+
+# User auth mode: disabled | key | ldap | both (default: disabled)
+AUTH_MODE=disabled
+# AQUILA_LICENSE_KEY=   # RS256 instance license JWT (required when AUTH_MODE != disabled)
+# AQUILA_JWT_SECRET=    # HS256 secret for session tokens — set in production
+# LDAP_URL=             # e.g. ldap://dc.company.com:389 (required for ldap/both modes)
 
 # CORS — comma-separated origins (defaults cover Vite dev server)
 CORS_ORIGINS=http://localhost:3000,http://localhost:5173
@@ -242,6 +250,12 @@ uv run aquila security /path/to/repo --repo my-repo --no-llm
 uv run aquila security /path/to/repo --repo my-repo --config p/owasp-top-ten
 ```
 
+Static tools (all optional, gracefully degraded if not installed):
+- **semgrep** — SAST rule-based analysis
+- **gitleaks** — secrets and credential detection (always classified critical, CWE-798)
+- **trivy** — SCA/CVE, container, Dockerfile, Terraform, K8s, Helm misconfigurations
+- **checkov** — IaC specialist (Terraform, CloudFormation, K8s, GitHub Actions)
+
 Output is grouped by severity:
 - 🔴 **Critical** — exploitable issues (injection, secrets, hardcoded credentials)
 - 🟠 **Major** — significant risks (broken access control, insecure deserialization)
@@ -283,6 +297,8 @@ uv run aquila-serve          # http://localhost:8000
 cd frontend
 npm install && npm run dev   # http://localhost:5173
 ```
+
+**Login** — When `AUTH_MODE` is set, users log in via seat key activation or LDAP/AD credentials before accessing any feature.
 
 **Chat tab** — Multi-turn Q&A with streaming, suggestion chips, source citations, Monaco source viewer, and multi-session management.
 

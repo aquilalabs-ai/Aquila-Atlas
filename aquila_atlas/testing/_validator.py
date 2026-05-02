@@ -79,6 +79,8 @@ def _validate_javascript(content: str, output_path: str) -> tuple[bool | None, s
             ["node", "--check", tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
         )
         return (
@@ -128,6 +130,8 @@ def _validate_typescript(content: str, output_path: str) -> tuple[bool | None, s
                 ["tsc", "--project", str(tmp / "tsconfig.json")],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=_TIMEOUT,
                 cwd=tmpdir,
             )
@@ -153,6 +157,8 @@ def _validate_java(content: str, output_path: str) -> tuple[bool | None, str | N
                 ["javac", "-proc:none", str(src)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=_TIMEOUT,
             )
             return (
@@ -183,6 +189,8 @@ def _validate_go(content: str) -> tuple[bool | None, str | None]:
             ["gofmt", "-e", tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
         )
         return (
@@ -217,6 +225,8 @@ def _validate_rust(content: str, output_path: str) -> tuple[bool | None, str | N
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=_TIMEOUT,
             )
             return (
@@ -243,6 +253,8 @@ def _validate_ruby(content: str) -> tuple[bool | None, str | None]:
             ["ruby", "-c", tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
         )
         return (
@@ -272,6 +284,8 @@ def _validate_php(content: str) -> tuple[bool | None, str | None]:
             ["php", "-l", tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
         )
         return (
@@ -306,6 +320,8 @@ def _validate_bash(content: str) -> tuple[bool | None, str | None]:
             ["bash", "-n", tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TIMEOUT,
         )
         return (

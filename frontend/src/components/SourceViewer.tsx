@@ -57,12 +57,25 @@ export function SourceViewer({ repoId, filePath, line, endLine }: Props) {
   // making citation scroll targets accurate.
   const content = data?.chunks
     ? (() => {
-        const sorted = [...data.chunks].sort((a, b) => a.start_line - b.start_line)
+        // Skip synthetic file-summary chunks — their content is generated metadata,
+        // not actual source lines.
+        const sorted = [...data.chunks]
+          .filter((c) => c.chunk_type !== 'file')
+          .sort((a, b) => a.start_line - b.start_line || a.chunk_index - b.chunk_index)
         const lines: string[] = []
         for (const chunk of sorted) {
-          // Pad to reach this chunk's start line (1-indexed → 0-indexed array)
-          while (lines.length < chunk.start_line - 1) lines.push('')
-          for (const l of chunk.content.split('\n')) lines.push(l)
+          if (!chunk.content) continue
+          // Clamp to 0: start_line=0 means unknown/top-of-file, treat as line 1.
+          // Without this, targetIdx=-1 makes skip=lines.length+1, silently
+          // dropping the entire content of short chunks.
+          const targetIdx = Math.max(0, chunk.start_line - 1)
+          // Pad to reach this chunk's start line (1-indexed → 0-indexed array).
+          // If start_line is already covered (sub-chunk overlap), skip padding and
+          // resume appending so overlap lines are not duplicated.
+          while (lines.length < targetIdx) lines.push('')
+          const chunkLines = chunk.content.split('\n')
+          const skip = Math.max(0, lines.length - targetIdx)
+          for (let i = skip; i < chunkLines.length; i++) lines.push(chunkLines[i])
         }
         return lines.join('\n')
       })()

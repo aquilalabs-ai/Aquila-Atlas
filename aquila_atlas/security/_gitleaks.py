@@ -55,6 +55,8 @@ def run_gitleaks(path: str) -> list[Finding]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_GITLEAKS_TIMEOUT,
         )
         if result.returncode not in (0, 1):

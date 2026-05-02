@@ -29,6 +29,8 @@ def _run_semgrep_cmd(path: str, config: str) -> subprocess.CompletedProcess[str]
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_SEMGREP_TIMEOUT,
         )
     except subprocess.TimeoutExpired:

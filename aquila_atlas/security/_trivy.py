@@ -51,6 +51,8 @@ def run_trivy(path: str) -> list[Finding]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_TRIVY_TIMEOUT,
         )
     except subprocess.TimeoutExpired:

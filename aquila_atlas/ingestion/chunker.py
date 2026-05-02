@@ -37,19 +37,25 @@ def chunk_entity(
                 token_count=len(full_tokens),
                 chunk_index=0,
                 chunk_total=1,
+                start_line=entity.start_line,
+                end_line=entity.end_line,
             )
         ]
 
-    # Split by lines, accumulate up to max_tokens, then overlap
+    # Split by lines, accumulate up to max_tokens, then overlap.
+    # Track the 0-based line offset within the entity so each sub-chunk gets
+    # its own absolute start_line / end_line in the original file.
     lines = entity.source.splitlines(keepends=True)
-    chunks_text: list[str] = []
+    # (chunk_lines, start_offset_within_entity)
+    chunks_data: list[tuple[list[str], int]] = []
     current_lines: list[str] = []
     current_token_count = 0
+    current_start_offset = 0  # 0-based index into `lines`
 
     for line in lines:
         line_tokens = len(enc.encode(line))
         if current_token_count + line_tokens > max_tokens and current_lines:
-            chunks_text.append("".join(current_lines))
+            chunks_data.append((list(current_lines), current_start_offset))
             # Build overlap: take lines from the end until we have overlap_tokens
             overlap_lines: list[str] = []
             overlap_count = 0
@@ -59,6 +65,8 @@ def chunk_entity(
                     break
                 overlap_lines.insert(0, prev_line)
                 overlap_count += prev_tokens
+            # New chunk starts after the non-overlapping portion of the previous chunk
+            current_start_offset += len(current_lines) - len(overlap_lines)
             current_lines = overlap_lines + [line]
             current_token_count = overlap_count + line_tokens
         else:
@@ -66,18 +74,20 @@ def chunk_entity(
             current_token_count += line_tokens
 
     if current_lines:
-        chunks_text.append("".join(current_lines))
+        chunks_data.append((list(current_lines), current_start_offset))
 
-    total = len(chunks_text)
+    total = len(chunks_data)
     return [
         CodeChunk(
             entity=entity,
-            content=text,
-            token_count=len(enc.encode(text)),
+            content="".join(chunk_lines),
+            token_count=len(enc.encode("".join(chunk_lines))),
             chunk_index=i,
             chunk_total=total,
+            start_line=entity.start_line + start_offset,
+            end_line=entity.start_line + start_offset + len(chunk_lines) - 1,
         )
-        for i, text in enumerate(chunks_text)
+        for i, (chunk_lines, start_offset) in enumerate(chunks_data)
     ]
 
 
@@ -139,6 +149,8 @@ def chunk_file_summary(entities: list[CodeEntity]) -> CodeChunk | None:
         token_count=token_count,
         chunk_index=0,
         chunk_total=1,
+        start_line=file_entity.start_line,
+        end_line=file_entity.end_line,
     )
 
 

@@ -104,6 +104,8 @@ def _resolve_repo_source(svc: KnowledgeService, repo_id: str) -> tuple[str, Any,
             ["git", "-C", str(path), "rev-parse", "--git-dir"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
     except FileNotFoundError:
@@ -134,6 +136,8 @@ def _run_git(path: Path, args: list[str], timeout: int = 30) -> tuple[str, str |
             ["git", "-C", str(path), *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if result.returncode != 0:
